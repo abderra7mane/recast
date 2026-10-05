@@ -28,6 +28,12 @@ export const commands = {
 };
 
 /* Types */
+/**  Gains from 0 (muted) to 2. */
+export type AudioMix = {
+	micVolume?: number | null,
+	systemVolume?: number | null,
+};
+
 export type AudioTrack = {
 	file: string,
 	/**  Start of the track relative to the first video frame. */
@@ -35,11 +41,46 @@ export type AudioTrack = {
 	durationMs: number | null,
 };
 
+export type BackgroundFill = { kind: "solid"; color: Color } | 
+/**  `angle_deg` follows CSS: 0 points up, 90 points right. */
+{ kind: "gradient"; from: Color; to: Color; angleDeg: number | null } | 
+/**  PNG or JPEG, absolute or relative to the bundle. Scaled to cover the frame. */
+{ kind: "image"; path: string };
+
+/**  `padding` and `corner_radius` are fractions of the screen's shorter side. */
+export type BackgroundSettings = {
+	fill?: BackgroundFill,
+	padding?: number | null,
+	cornerRadius?: number | null,
+	shadow?: Shadow,
+};
+
 export type CaptureSource = { kind: "display"; displayId: number } | { kind: "window"; windowId: number; title: string | null; appName: string | null } | { kind: "region"; displayId: number; rect: Rect };
 
 export type CaptureTarget = { kind: "display"; displayId: number } | { kind: "window"; windowId: number } | 
 /**  `rect` is in points, relative to the display's top-left corner. */
 { kind: "region"; displayId: number; rect: Rect };
+
+export type ClickSettings = {
+	ripple?: boolean,
+	color?: Color,
+	/**  Largest ripple radius, in screen points. */
+	size?: number | null,
+	squish?: boolean,
+};
+
+export type Codec = "h264" | "hevc";
+
+/**  An sRGB color, written as `#rrggbb` or `#rrggbbaa`. */
+export type Color = string;
+
+export type CursorSettings = {
+	/**  Multiple of the recorded cursor size. */
+	size?: number | null,
+	/**  0 follows the recorded path exactly; 1 is the smoothest. */
+	smoothing?: number | null,
+	hideWhenIdle?: boolean,
+};
 
 export type DisplayInfo = {
 	id: number,
@@ -49,12 +90,38 @@ export type DisplayInfo = {
 	scaleFactor: number | null,
 };
 
+/**
+ *  Everything the user can change about a recording. Rendering never alters the
+ *  recorded media; these settings are applied at preview and export time.
+ */
+export type EditSettings = {
+	version?: number,
+	background?: BackgroundSettings,
+	cursor?: CursorSettings,
+	zoom?: ZoomSettings,
+	clicks?: ClickSettings,
+	sounds?: SoundSettings,
+	audio?: AudioMix,
+	trim?: Trim,
+	export?: ExportSettings,
+};
+
+export type ExportSettings = {
+	codec?: Codec,
+	resolution?: Resolution,
+	fps?: FrameRate,
+	/**  0..1, mapped to the encoder bitrate. */
+	quality?: number | null,
+};
+
 export type FinishedRecording = {
 	bundlePath: string,
 	project: Project,
 	/**  Problems that did not prevent saving, such as the capture stopping on its own. */
 	warnings: string[],
 };
+
+export type FrameRate = "30" | "60";
 
 export type Permission = "screenRecording" | "inputMonitoring" | "microphone";
 
@@ -71,6 +138,7 @@ export type Project = {
 	name: string,
 	createdAtUnixMs: number | null,
 	recording: Recording,
+	edits?: EditSettings,
 };
 
 export type Recording = {
@@ -113,6 +181,33 @@ export type Rect = {
 	height: number | null,
 };
 
+/**  The output's shorter side. */
+export type Resolution = "1080p" | "1440p" | "4k";
+
+/**  Sizes are fractions of the screen's shorter side. */
+export type Shadow = {
+	opacity?: number | null,
+	blur?: number | null,
+	offsetY?: number | null,
+};
+
+export type SoundPack = "softTap" | "mouseClick" | "mechanical";
+
+export type SoundSettings = {
+	enabled?: boolean,
+	pack?: SoundPack,
+	/**  0..1 */
+	volume?: number | null,
+	/**  Right clicks use the pack's own right-button sounds instead of the left ones. */
+	separateLeftRight?: boolean,
+};
+
+/**  Milliseconds on the recording's timeline; no `end_ms` means the end of the recording. */
+export type Trim = {
+	startMs?: number | null,
+	endMs?: number | null,
+};
+
 export type UnfinishedBundle = {
 	path: string,
 	name: string,
@@ -133,6 +228,24 @@ export type WindowInfo = {
 	appName: string,
 	/**  Global display points. */
 	bounds: Rect,
+};
+
+export type ZoomFocus = { kind: "followCursor" } | 
+/**  Normalized position on the screen, 0..1 from the top-left corner. */
+{ kind: "point"; x: number | null; y: number | null };
+
+export type ZoomSegment = {
+	startMs: number | null,
+	endMs: number | null,
+	level: number | null,
+	focus: ZoomFocus,
+};
+
+/**  With `auto` on, segments are generated from clicks and `segments` is ignored. */
+export type ZoomSettings = {
+	auto?: boolean,
+	level?: number | null,
+	segments?: ZoomSegment[],
 };
 
 /* Tauri Specta runtime */

@@ -120,6 +120,7 @@ fn initial_project(name: String, request: &RecordingRequest, info: &CaptureInfo)
             cursors_dir: CURSORS_DIR.into(),
             recovered: false,
         },
+        edits: Default::default(),
     }
 }
 

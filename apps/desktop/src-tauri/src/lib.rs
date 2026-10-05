@@ -1,6 +1,8 @@
 pub mod recording;
 #[cfg(feature = "synthetic")]
 pub mod synthetic_capture;
+#[cfg(feature = "synthetic")]
+pub mod synthetic_input;
 
 use std::{path::Path, sync::Mutex};
 

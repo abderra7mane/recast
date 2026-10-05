@@ -3,7 +3,7 @@ PNPM := pnpm --dir $(DESKTOP)
 # The local Apple Development certificate keeps macOS permissions across rebuilds.
 SIGNING_IDENTITY ?= Apple Development
 
-.PHONY: help install dev build bindings test test-rust test-ui lint lint-rust lint-ui fmt record simulate unfinished recover discard permissions clean
+.PHONY: help install dev build bindings test test-rust test-ui lint lint-rust lint-ui fmt record simulate export update-goldens sounds unfinished recover discard permissions clean
 
 help:
 	@echo "install   install JS dependencies"
@@ -14,7 +14,10 @@ help:
 	@echo "lint      clippy (-D warnings), rustfmt check, eslint, prettier check, tsc"
 	@echo "fmt       format Rust and UI sources"
 	@echo "record    record from the CLI: make record ARGS='--seconds 5 --display'"
-	@echo "simulate  record generated video/audio (no permissions needed): make simulate ARGS='--seconds 5'"
+	@echo "simulate  record generated video/audio/input (no permissions needed): make simulate ARGS='--seconds 5'"
+	@echo "export    export a bundle to MP4: make export BUNDLE=path ARGS='--set export.fps=30 --out out.mp4'"
+	@echo "update-goldens  re-render the golden frames of the compositor tests"
+	@echo "sounds    regenerate the bundled click sounds"
 	@echo "unfinished list bundles left by a crash"
 	@echo "recover   recover a bundle from the CLI: make recover BUNDLE=path"
 	@echo "discard   move a crashed bundle to the Trash: make discard BUNDLE=path"
@@ -62,6 +65,15 @@ record:
 
 simulate:
 	$(CLI) simulate $(ARGS)
+
+export:
+	$(CLI) export "$(BUNDLE)" $(ARGS)
+
+update-goldens:
+	UPDATE_GOLDENS=1 cargo test -p recast-render --test golden
+
+sounds:
+	cargo run --quiet -p recast-export --example generate-sounds
 
 unfinished:
 	$(CLI) unfinished $(ARGS)

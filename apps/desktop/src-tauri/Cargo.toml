@@ -18,6 +18,8 @@ tauri-build = { version = "2.7.1", features = [] }
 recast-capture.workspace = true
 recast-input.workspace = true
 recast-project.workspace = true
+recast-export.workspace = true
+recast-render.workspace = true
 tauri = { version = "2.12.1", features = [] }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 specta.workspace = true

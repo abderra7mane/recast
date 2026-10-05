@@ -1,0 +1,111 @@
+struct Params {
+    // canvas width, height; content x, y (pixels)
+    canvas_content: vec4f,
+    // content width, height; corner radius; shadow blur (pixels)
+    content_size: vec4f,
+    // shadow offset y (pixels), shadow opacity, background kind, ripple count
+    shadow: vec4f,
+    // visible part of the screen: x, y, width, height (0..1)
+    view: vec4f,
+    bg_a: vec4f,
+    bg_b: vec4f,
+    // gradient direction x, y
+    gradient: vec4f,
+    ripple_color: vec4f,
+    // screen texture width, height (texels); ripple ring thickness (pixels)
+    source: vec4f,
+    // x, y, radius (pixels), opacity
+    ripples: array<vec4f, 16>,
+}
+
+@group(0) @binding(0) var<uniform> u: Params;
+@group(0) @binding(1) var screen_tex: texture_2d<f32>;
+@group(0) @binding(2) var bg_tex: texture_2d<f32>;
+@group(0) @binding(3) var linear_sampler: sampler;
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+    let corner = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4f(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+
+fn sd_round_rect(p: vec2f, half_size: vec2f, radius: f32) -> f32 {
+    let q = abs(p) - half_size + vec2f(radius);
+    return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+}
+
+fn hash(p: vec2f) -> f32 {
+    let h = dot(p, vec2f(127.1, 311.7));
+    return fract(sin(h) * 43758.5453);
+}
+
+fn background(p: vec2f) -> vec3f {
+    let canvas = u.canvas_content.xy;
+    let kind = u.shadow.z;
+    if kind < 0.5 {
+        return u.bg_a.rgb;
+    }
+    if kind < 1.5 {
+        let dir = u.gradient.xy;
+        let extent = 0.5 * (abs(dir.x) * canvas.x + abs(dir.y) * canvas.y);
+        let t = dot(p - canvas * 0.5, dir) / max(extent, 1e-3) * 0.5 + 0.5;
+        return mix(u.bg_a.rgb, u.bg_b.rgb, clamp(t, 0.0, 1.0));
+    }
+    return textureSampleLevel(bg_tex, linear_sampler, p / canvas, 0.0).rgb;
+}
+
+// Box-filters the screen over the area one output pixel covers, so downscaled text stays legible.
+fn sample_screen(uv: vec2f) -> vec3f {
+    let texels_per_pixel = u.view.zw * u.source.xy / u.content_size.xy;
+    let taps = clamp(ceil(max(texels_per_pixel.x, texels_per_pixel.y)), 1.0, 4.0);
+    if taps <= 1.0 {
+        return textureSampleLevel(screen_tex, linear_sampler, uv, 0.0).rgb;
+    }
+    let footprint = texels_per_pixel / u.source.xy;
+    let n = i32(taps);
+    var sum = vec3f(0.0);
+    for (var y = 0; y < n; y++) {
+        for (var x = 0; x < n; x++) {
+            let offset = (vec2f(f32(x), f32(y)) + 0.5) / taps - 0.5;
+            sum += textureSampleLevel(screen_tex, linear_sampler, uv + offset * footprint, 0.0).rgb;
+        }
+    }
+    return sum / (taps * taps);
+}
+
+@fragment
+fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+    let p = pos.xy;
+    var color = background(p);
+
+    let content_min = u.canvas_content.zw;
+    let size = u.content_size.xy;
+    let radius = u.content_size.z;
+    let half_size = size * 0.5;
+    let center = content_min + half_size;
+
+    let blur = max(u.content_size.w, 0.5);
+    let shadow_distance = sd_round_rect(p - center - vec2f(0.0, u.shadow.x), half_size, radius);
+    let shadow = u.shadow.y * (1.0 - smoothstep(-blur, blur, shadow_distance));
+    color *= 1.0 - shadow;
+
+    let distance = sd_round_rect(p - center, half_size, radius);
+    let coverage = clamp(0.5 - distance, 0.0, 1.0);
+    if coverage > 0.0 {
+        let local = (p - content_min) / size;
+        var screen = sample_screen(u.view.xy + local * u.view.zw);
+        let half_ring = u.source.z * 0.5;
+        for (var i = 0u; i < u32(u.shadow.w); i++) {
+            let ripple = u.ripples[i];
+            let d = length(p - ripple.xy);
+            let ring = 1.0 - smoothstep(half_ring - 0.75, half_ring + 0.75, abs(d - ripple.z));
+            let fill = 0.2 * (1.0 - smoothstep(ripple.z - 1.0, ripple.z + 1.0, d));
+            let alpha = clamp(ring + fill, 0.0, 1.0) * ripple.w * u.ripple_color.a;
+            screen = mix(screen, u.ripple_color.rgb, alpha);
+        }
+        color = mix(color, screen, coverage);
+    }
+
+    let dither = (hash(p) - 0.5) / 255.0;
+    return vec4f(color + vec3f(dither), 1.0);
+}

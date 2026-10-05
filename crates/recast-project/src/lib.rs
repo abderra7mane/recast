@@ -1,4 +1,5 @@
 mod bundle;
+mod edits;
 mod events;
 pub mod mp4;
 mod schema;
@@ -6,6 +7,7 @@ mod schema;
 mod test_support;
 
 pub use bundle::*;
+pub use edits::*;
 pub use events::*;
 pub use schema::*;
 
@@ -21,6 +23,8 @@ pub enum Error {
     Decode(#[from] rmp_serde::decode::Error),
     #[error("invalid media file: {0}")]
     InvalidMedia(String),
+    #[error("unsupported edit settings version {0}")]
+    UnsupportedEditsVersion(u32),
     #[error("unsupported project version {0}")]
     UnsupportedVersion(u32),
     #[error("{0} is not a Recast bundle")]

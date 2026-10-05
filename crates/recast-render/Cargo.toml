@@ -6,5 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[dependencies]
+recast-project.workspace = true
+recast-zoom.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+image.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

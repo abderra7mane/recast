@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::EditSettings;
+
 pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Type)]
@@ -69,4 +71,6 @@ pub struct Project {
     pub name: String,
     pub created_at_unix_ms: f64,
     pub recording: Recording,
+    #[serde(default)]
+    pub edits: EditSettings,
 }

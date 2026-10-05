@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::{
-    AudioTrack, Error, EventLog, Project, Result, SCHEMA_VERSION, TrackStarts, compile_event_log,
-    mp4, ns_delta_ms, read_record_log,
+    AudioTrack, EDITS_VERSION, Error, EventLog, Project, Result, SCHEMA_VERSION, TrackStarts,
+    compile_event_log, mp4, ns_delta_ms, read_record_log,
 };
 
 pub const BUNDLE_EXTENSION: &str = "recast";
@@ -145,6 +145,9 @@ impl Bundle {
         let project: Project = serde_json::from_slice(&fs::read(self.file(PROJECT_FILE))?)?;
         if project.version > SCHEMA_VERSION {
             return Err(Error::UnsupportedVersion(project.version));
+        }
+        if project.edits.version > EDITS_VERSION {
+            return Err(Error::UnsupportedEditsVersion(project.edits.version));
         }
         Ok(project)
     }
@@ -426,6 +429,7 @@ mod tests {
                 cursors_dir: CURSORS_DIR.into(),
                 recovered: false,
             },
+            edits: Default::default(),
         }
     }
 
@@ -462,6 +466,33 @@ mod tests {
         assert!(matches!(
             bundle.load_project(),
             Err(Error::UnsupportedVersion(_))
+        ));
+    }
+
+    #[test]
+    fn edits_round_trip_and_default_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = Bundle::create(dir.path(), "Edited").unwrap();
+        let mut p = project("Edited", false);
+        p.edits.zoom.level = 3.0;
+        p.edits.trim.end_ms = Some(1_500.0);
+        bundle.save_project(&p).unwrap();
+        assert_eq!(bundle.load_project().unwrap(), p);
+
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(bundle.file(PROJECT_FILE)).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("edits");
+        fs::write(bundle.file(PROJECT_FILE), json.to_string()).unwrap();
+        assert_eq!(
+            bundle.load_project().unwrap().edits,
+            crate::EditSettings::default()
+        );
+
+        json["edits"] = serde_json::json!({ "version": EDITS_VERSION + 1 });
+        fs::write(bundle.file(PROJECT_FILE), json.to_string()).unwrap();
+        assert!(matches!(
+            bundle.load_project(),
+            Err(Error::UnsupportedEditsVersion(_))
         ));
     }
 
