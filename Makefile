@@ -3,7 +3,7 @@ PNPM := pnpm --dir $(DESKTOP)
 # The local Apple Development certificate keeps macOS permissions across rebuilds.
 SIGNING_IDENTITY ?= Apple Development
 
-.PHONY: help install dev build bindings test test-rust test-ui lint lint-rust lint-ui fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions clean
+.PHONY: help install dev build bindings test test-rust test-ui lint lint-rust lint-ui lint-workflows fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions updater-key release-check release-bundle release-assets clean
 
 help:
 	@echo "install   install JS dependencies"
@@ -23,6 +23,11 @@ help:
 	@echo "recover   recover a bundle from the CLI: make recover BUNDLE=path"
 	@echo "discard   move a crashed bundle to the Trash: make discard BUNDLE=path"
 	@echo "permissions show Screen Recording / Input Monitoring / Microphone status"
+	@echo "updater-key generate the updater signing key pair in ~/.tauri/recast.key and print its public key"
+	@echo "lint-workflows check the GitHub Actions workflows with actionlint"
+	@echo "release-check   CI: check that TAG matches the app version"
+	@echo "release-bundle  CI: build the ad-hoc signed app, DMG and signed updater archive"
+	@echo "release-assets  CI: collect the release files and latest.json: make release-assets REPO=owner/repo"
 
 install:
 	pnpm install --frozen-lockfile
@@ -92,6 +97,34 @@ discard:
 
 permissions:
 	$(CLI) permissions
+
+UPDATER_KEY ?= $(HOME)/.tauri/recast.key
+
+updater-key:
+	@if [ -e "$(UPDATER_KEY)" ]; then echo "$(UPDATER_KEY) already exists, keeping it."; exit 1; fi
+	$(PNPM) tauri signer generate --write-keys "$(UPDATER_KEY)"
+	@echo
+	@echo "Public key (UPDATER_PUBKEY):"
+	@cat "$(UPDATER_KEY).pub"
+	@echo
+
+lint-workflows:
+	@if command -v actionlint >/dev/null; then actionlint; else echo "actionlint is not installed, skipping (brew install actionlint)."; fi
+
+RELEASE_CONFIG := $(CURDIR)/target/release.conf.json
+
+release-check:
+	node scripts/release.mjs check-version "$(TAG)"
+
+# Needs UPDATER_ENDPOINT, UPDATER_PUBKEY and TAURI_SIGNING_PRIVATE_KEY (and its
+# password, if any) in the environment. The app is signed ad hoc.
+release-bundle: install bindings
+	@mkdir -p target
+	node scripts/release.mjs config > "$(RELEASE_CONFIG)"
+	APPLE_SIGNING_IDENTITY=- $(PNPM) tauri build --bundles app,dmg --config "$(RELEASE_CONFIG)"
+
+release-assets:
+	node scripts/release.mjs assets "$(REPO)" target/release-assets
 
 clean:
 	cargo clean

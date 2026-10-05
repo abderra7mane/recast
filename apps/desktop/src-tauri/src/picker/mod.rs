@@ -12,6 +12,8 @@ use recast_capture::{
 };
 use tauri::{AppHandle, Manager, WebviewWindow};
 
+use crate::focus::Focus;
+
 static OPEN: AtomicBool = AtomicBool::new(false);
 
 struct OpenGuard;
@@ -22,8 +24,15 @@ impl Drop for OpenGuard {
     }
 }
 
+pub struct Pick {
+    pub picked: Picked,
+    /// Activation taken from the app the user was in; give it back once the overlays
+    /// that follow the pick are gone.
+    pub focus: Focus,
+}
+
 /// Lets the user pick a display, window or region; `None` when they cancel.
-pub async fn pick(app: &AppHandle, mode: PickMode) -> Result<Option<Picked>, String> {
+pub async fn pick(app: &AppHandle, mode: PickMode) -> Result<Option<Pick>, String> {
     if OPEN.swap(true, Ordering::SeqCst) {
         return Err("The picker is already open.".into());
     }
@@ -37,13 +46,21 @@ pub async fn pick(app: &AppHandle, mode: PickMode) -> Result<Option<Picked>, Str
     let own_pid = std::process::id() as i32;
     app.run_on_main_thread(move || {
         let mtm = MainThreadMarker::new().expect("runs on the main thread");
+        let focus = Focus::take(mtm);
         overlay::open(
             mtm,
             mode,
             windows,
             own_pid,
             Box::new(move |picked| {
-                let _ = tx.send(picked);
+                let pick = match picked {
+                    Some(picked) => Some(Pick { picked, focus }),
+                    None => {
+                        focus.restore(mtm);
+                        None
+                    }
+                };
+                let _ = tx.send(pick);
             }),
         );
     })
@@ -52,26 +69,17 @@ pub async fn pick(app: &AppHandle, mode: PickMode) -> Result<Option<Picked>, Str
         .map_err(|_| "The picker closed unexpectedly.".to_string())
 }
 
-/// Hides the main window so it doesn't cover what the user is picking.
-pub fn hide_main(app: &AppHandle) -> Option<WebviewWindow> {
-    let main = app
-        .get_webview_window("main")
+/// Hides the Library window so it doesn't cover what the user is picking.
+pub fn hide_library(app: &AppHandle) -> Option<WebviewWindow> {
+    let library = app
+        .get_webview_window(crate::windows::LIBRARY)
         .filter(|w| w.is_visible().unwrap_or(false))?;
-    let _ = main.hide();
-    Some(main)
+    let _ = library.hide();
+    Some(library)
 }
 
-pub fn show_main(main: Option<WebviewWindow>) {
-    if let Some(main) = main {
-        let _ = main.show();
+pub fn show_library(library: Option<WebviewWindow>) {
+    if let Some(library) = library {
+        let _ = library.show();
     }
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn pick_target(app: AppHandle, mode: PickMode) -> Result<Option<Picked>, String> {
-    let main = hide_main(&app);
-    let picked = pick(&app, mode).await;
-    show_main(main);
-    picked
 }

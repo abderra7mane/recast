@@ -11,15 +11,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Recast",
-        "width": 560,
-        "height": 820,
-        "minWidth": 480,
-        "minHeight": 600
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:*"
     }
@@ -38,6 +30,16 @@
       "minimumSystemVersion": "14.0",
       "entitlements": "./Entitlements.plist",
       "hardenedRuntime": true
+    },
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/<owner>/recast-releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_UPDATER_PUBLIC_KEY",
+      "requireSignedVersion": true
     }
   }
 }

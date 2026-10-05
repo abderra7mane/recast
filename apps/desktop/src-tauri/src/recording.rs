@@ -246,6 +246,18 @@ impl Session {
         }
     }
 
+    /// Stops the recording and deletes its bundle.
+    pub fn discard(self) {
+        self.input.stop();
+        if let Err(e) = self.capture.stop() {
+            log::warn!("capture did not stop cleanly: {e}");
+        }
+        self.log.lock().expect("log lock").take();
+        if let Err(e) = std::fs::remove_dir_all(self.bundle.path()) {
+            log::warn!("cannot delete {}: {e}", self.bundle.path().display());
+        }
+    }
+
     /// Stops and saves the recording. A capture error does not lose the bundle: the
     /// media is trimmed to what was fully written and the error comes back as a warning.
     pub fn stop(self) -> Result<FinishedRecording, String> {
@@ -275,14 +287,14 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod fakes {
     use recast_capture::{DisplayInfo, EventHandler, WindowInfo};
     use recast_project::Rect;
 
     use super::*;
 
-    struct FakeCapture;
-    struct FakeActive(CaptureInfo);
+    pub struct FakeCapture;
+    pub struct FakeActive(CaptureInfo);
 
     impl ScreenCapture for FakeCapture {
         fn displays(&self) -> recast_capture::Result<Vec<DisplayInfo>> {
@@ -328,8 +340,8 @@ mod tests {
         }
     }
 
-    struct FakeInput;
-    struct FakeInputActive;
+    pub struct FakeInput;
+    pub struct FakeInputActive;
 
     impl InputCapture for FakeInput {
         fn start(
@@ -352,6 +364,17 @@ mod tests {
         }
         fn stop(self: Box<Self>) {}
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use recast_capture::{DisplayInfo, EventHandler, WindowInfo};
+    use recast_project::Rect;
+
+    use super::{
+        fakes::{FakeCapture, FakeInput},
+        *,
+    };
 
     #[test]
     fn failed_start_removes_bundle() {
@@ -447,6 +470,23 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert!(listed[0].problem.is_some());
         assert!(Bundle::open_crashed(&path).is_ok());
+    }
+
+    #[test]
+    fn discard_deletes_the_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::start(
+            dir.path(),
+            "Gone",
+            &display_request(),
+            &FakeCapture,
+            &FakeInput,
+        )
+        .unwrap();
+        let path = session.path();
+        assert!(path.exists());
+        session.discard();
+        assert!(!path.exists());
     }
 
     #[test]

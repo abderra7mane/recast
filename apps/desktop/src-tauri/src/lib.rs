@@ -1,46 +1,45 @@
+mod actions;
+pub mod activation;
+mod alert;
 mod appkit;
+pub mod diagnostics;
 pub mod editor;
+pub mod flow;
+mod focus;
+pub mod hotkeys;
+pub mod logging;
+mod login_item;
+pub mod onboarding;
 pub mod picker;
 pub mod recording;
+pub mod recording_ui;
 pub mod screenshots;
 pub mod settings;
+pub mod shortcuts;
 #[cfg(feature = "synthetic")]
 pub mod synthetic_capture;
 #[cfg(feature = "synthetic")]
 pub mod synthetic_input;
+pub mod tray;
+mod updates;
+pub mod windows;
 
-use std::{path::Path, sync::Mutex};
+use std::path::Path;
 
 use editor::commands::{self as editor_commands, Editors, ExportFinished, ExportProgress};
-use recast_capture::{DisplayInfo, ScreenCapture, WindowInfo};
+use flow::{Flow, Phase};
+use hotkeys::ShortcutStatus;
 use recast_input::{Permission, PermissionState, Permissions};
 use recast_project::UnfinishedBundle;
-use recording::{FinishedRecording, RecordingRequest, RecordingStatus, Session};
+use recording::FinishedRecording;
+use recording_ui::{RecorderUi, RecordingChanged};
 use screenshots::beautify::{self, Beautifiers};
-use settings::{AppSettings, ScreenshotSettings, SettingsStore};
+use serde::{Deserialize, Serialize};
+use settings::{AppSettings, RecordingSettings, ScreenshotSettings, SettingsStore, UpdateSettings};
+use shortcuts::ShortcutAction;
+use specta::Type;
 use tauri::{AppHandle, Manager, State};
 use tauri_specta::{Builder, collect_commands, collect_events};
-
-#[derive(Default)]
-pub struct AppState {
-    session: Mutex<Option<Session>>,
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn list_displays() -> Result<Vec<DisplayInfo>, String> {
-    recast_capture::platform()
-        .displays()
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn list_windows() -> Result<Vec<WindowInfo>, String> {
-    recast_capture::platform()
-        .windows()
-        .map_err(|e| e.to_string())
-}
 
 #[tauri::command]
 #[specta::specta]
@@ -54,64 +53,42 @@ async fn request_permission(permission: Permission) -> PermissionState {
     recast_input::request_permission(permission)
 }
 
+/// Picks a target and starts recording it, after the countdown when that is on.
 #[tauri::command]
 #[specta::specta]
-async fn start_recording(
-    state: State<'_, AppState>,
-    request: RecordingRequest,
-) -> Result<RecordingStatus, String> {
-    let mut slot = state.session.lock().map_err(|e| e.to_string())?;
-    if slot.is_some() {
-        return Err("a recording is already running".into());
+async fn start_recording(app: AppHandle) -> Result<(), String> {
+    if recast_input::check_permissions().screen_recording != PermissionState::Granted {
+        windows::show(&app, windows::ONBOARDING)?;
+        return Err("Recast needs the Screen Recording permission.".into());
     }
-    let session = Session::start(
-        &recast_project::default_root(),
-        &recording::default_name(),
-        &request,
-        &recast_capture::platform(),
-        &recast_input::platform(),
-    )?;
-    let status = session.status();
-    *slot = Some(session);
-    Ok(status)
+    recording_ui::start(app).await
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn recording_status(state: State<'_, AppState>) -> Result<Option<RecordingStatus>, String> {
-    let slot = state.session.lock().map_err(|e| e.to_string())?;
-    Ok(slot.as_ref().map(Session::status))
+async fn stop_recording(app: AppHandle) {
+    recording_ui::stop(app).await;
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn stop_recording(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<FinishedRecording, String> {
-    let session = state
-        .session
-        .lock()
-        .map_err(|e| e.to_string())?
-        .take()
-        .ok_or("no recording is running")?;
-    let finished = session.stop()?;
-    if let Err(e) = editor_commands::open_editor_window(&app, Path::new(&finished.bundle_path)) {
-        log::warn!("cannot open the editor: {e}");
-    }
-    Ok(finished)
+async fn recording_phase(flow: State<'_, Flow>) -> Result<Phase, String> {
+    Ok(flow.phase())
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn list_unfinished() -> Result<Vec<UnfinishedBundle>, String> {
-    recast_project::list_unfinished(&recast_project::default_root()).map_err(|e| e.to_string())
+async fn list_unfinished(
+    settings: State<'_, SettingsStore>,
+) -> Result<Vec<UnfinishedBundle>, String> {
+    recast_project::list_unfinished(&settings.get().recording.dir()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn recover_bundle(path: String) -> Result<FinishedRecording, String> {
+async fn recover_bundle(app: AppHandle, path: String) -> Result<FinishedRecording, String> {
     let project = recast_project::recover(Path::new(&path)).map_err(|e| e.to_string())?;
+    tray::refresh(&app);
     Ok(FinishedRecording {
         bundle_path: path,
         project,
@@ -138,13 +115,36 @@ async fn discard_unfinished(path: String) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-async fn reveal_in_finder(path: String) -> Result<(), String> {
-    std::process::Command::new("/usr/bin/open")
-        .arg("-R")
-        .arg(&path)
-        .status()
-        .map_err(|e| e.to_string())
-        .map(|_| ())
+async fn reveal_in_finder(path: String) {
+    screenshots::reveal(Path::new(&path));
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn open_recordings_folder(settings: State<'_, SettingsStore>) -> Result<(), String> {
+    actions::open_folder(&settings.get().recording.dir());
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AppWindow {
+    Library,
+    Settings,
+    Onboarding,
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn open_window(app: AppHandle, window: AppWindow) -> Result<(), String> {
+    windows::show(
+        &app,
+        match window {
+            AppWindow::Library => windows::LIBRARY,
+            AppWindow::Settings => windows::SETTINGS,
+            AppWindow::Onboarding => windows::ONBOARDING,
+        },
+    )
 }
 
 #[tauri::command]
@@ -162,25 +162,139 @@ async fn set_screenshot_settings(
     settings.update(|s| s.screenshots = screenshots)
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn set_recording_settings(
+    app: AppHandle,
+    settings: State<'_, SettingsStore>,
+    recording: RecordingSettings,
+) -> Result<AppSettings, String> {
+    let saved = settings.update(|s| s.recording = recording)?;
+    tray::refresh(&app);
+    Ok(saved)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_update_settings(
+    settings: State<'_, SettingsStore>,
+    updates: UpdateSettings,
+) -> Result<AppSettings, String> {
+    settings.update(|s| s.updates = updates)
+}
+
+/// Changes an action's shortcut, `None` turning it off. A conflict is an error and
+/// changes nothing; a shortcut macOS refuses is kept and reported in its status.
+#[tauri::command]
+#[specta::specta]
+async fn set_shortcut(
+    app: AppHandle,
+    settings: State<'_, SettingsStore>,
+    action: ShortcutAction,
+    shortcut: Option<String>,
+) -> Result<Vec<ShortcutStatus>, String> {
+    let normalized = match &shortcut {
+        Some(text) => Some(shortcuts::check(action, text, &settings.get().shortcuts)?.to_string()),
+        None => None,
+    };
+    settings.update(|s| action.set(&mut s.shortcuts, normalized))?;
+    let statuses = hotkeys::apply(&app);
+    tray::refresh(&app);
+    Ok(statuses)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn shortcut_statuses(app: AppHandle) -> Vec<ShortcutStatus> {
+    hotkeys::statuses(&app)
+}
+
+/// Turns the global shortcuts off while the Settings window records a new one.
+#[tauri::command]
+#[specta::specta]
+async fn suspend_shortcuts(app: AppHandle, suspended: bool) -> Vec<ShortcutStatus> {
+    hotkeys::suspend(&app, suspended)
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn check_for_updates(app: AppHandle) {
+    updates::check(app, true).await;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AppInfo {
+    pub version: String,
+    pub logs_dir: String,
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn app_info(app: AppHandle) -> AppInfo {
+    AppInfo {
+        version: app.package_info().version.to_string(),
+        logs_dir: logging::config().dir.display().to_string(),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn open_logs_folder() {
+    actions::open_folder(&logging::config().dir);
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn copy_diagnostics(app: AppHandle) -> Result<(), String> {
+    let version = app.package_info().version.to_string();
+    let text = tauri::async_runtime::spawn_blocking(move || {
+        let info = diagnostics::SystemInfo::current(&version);
+        let lines = logging::config().tail(diagnostics::LOG_LINES);
+        let home = std::env::var("HOME").unwrap_or_default();
+        diagnostics::text(&info, &lines, &home)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    screenshots::copy_text(&text)
+}
+
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
-        .events(collect_events![ExportProgress, ExportFinished])
+        .events(collect_events![
+            ExportProgress,
+            ExportFinished,
+            RecordingChanged
+        ])
         .commands(collect_commands![
-            list_displays,
-            list_windows,
             check_permissions,
             request_permission,
+            onboarding::open_privacy_settings,
+            onboarding::relaunch,
+            onboarding::complete_onboarding,
             start_recording,
-            recording_status,
             stop_recording,
+            recording_phase,
             list_unfinished,
             recover_bundle,
             discard_unfinished,
             reveal_in_finder,
+            open_recordings_folder,
+            open_window,
             get_settings,
             set_screenshot_settings,
-            picker::pick_target,
-            screenshots::take_screenshot,
+            set_recording_settings,
+            set_update_settings,
+            set_shortcut,
+            shortcut_statuses,
+            suspend_shortcuts,
+            login_item::get_launch_at_login,
+            login_item::set_launch_at_login,
+            login_item::open_login_items_settings,
+            check_for_updates,
+            app_info,
+            open_logs_folder,
+            copy_diagnostics,
             beautify::beautify_open,
             beautify::beautify_preview,
             beautify::beautify_copy,
@@ -212,38 +326,91 @@ pub fn export_bindings(path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    let settings_path = app.path().app_data_dir()?.join(settings::FILE_NAME);
+    app.manage(SettingsStore::load(&settings_path));
+    let handle = app.handle();
+    log::info!("Recast {} started", app.package_info().version);
+
+    for status in hotkeys::apply(handle) {
+        if let Some(error) = status.error {
+            log::warn!("shortcut for {:?}: {error}", status.action);
+        }
+    }
+    tray::create(handle)?;
+
+    for arg in std::env::args().skip(1) {
+        let path = std::path::PathBuf::from(arg);
+        if path
+            .extension()
+            .is_some_and(|e| e == recast_project::BUNDLE_EXTENSION)
+            && let Err(e) = editor_commands::open_editor_window(handle, &path)
+        {
+            log::warn!("cannot open {}: {e}", path.display());
+        }
+    }
+
+    let settings = handle.state::<SettingsStore>().get();
+    if !settings.onboarding_completed {
+        windows::show_or_log(handle, windows::ONBOARDING);
+    }
+    let unfinished = recast_project::list_unfinished(&settings.recording.dir()).unwrap_or_default();
+    if !unfinished.is_empty() {
+        log::info!("{} unfinished recordings", unfinished.len());
+        windows::show_or_log(handle, windows::LIBRARY);
+    }
+    if settings.updates.check_automatically {
+        tauri::async_runtime::spawn(updates::check(handle.clone(), false));
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = specta_builder();
     tauri::Builder::default()
+        .plugin(logging::config().plugin())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
+        .plugin(hotkeys::plugin())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Editors::default())
         .manage(Beautifiers::default())
+        .manage(Flow::default())
+        .manage(RecorderUi::default())
+        .manage(activation::Tracker::default())
+        .manage(hotkeys::Hotkeys::default())
+        .manage(tray::TrayState::default())
         .invoke_handler(builder.invoke_handler())
-        .setup(move |app| {
-            builder.mount_events(app);
-            let settings_path = app.path().app_data_dir()?.join(settings::FILE_NAME);
-            app.manage(SettingsStore::load(&settings_path));
-            for arg in std::env::args().skip(1) {
-                let path = std::path::PathBuf::from(arg);
-                if path
-                    .extension()
-                    .is_some_and(|e| e == recast_project::BUNDLE_EXTENSION)
-                    && let Err(e) = editor_commands::open_editor_window(app.handle(), &path)
-                {
-                    log::warn!("cannot open {}: {e}", path.display());
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                activation::window_destroyed(window.app_handle(), window.label());
+                if window.label() == windows::SETTINGS {
+                    hotkeys::resume(window.app_handle());
                 }
             }
-            Ok(())
+        })
+        .setup(move |app| {
+            builder.mount_events(app);
+            setup(app)
         })
         .build(tauri::generate_context!())
         .expect("error while building Recast")
-        .run(|app, event| {
+        .run(|app, event| match event {
+            // Closing the last window keeps Recast in the menu bar.
+            tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } => api.prevent_exit(),
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => windows::show_or_log(app, windows::LIBRARY),
             // Quitting does not destroy windows first, so sessions are saved here.
-            if let tauri::RunEvent::Exit = event {
+            tauri::RunEvent::Exit => {
+                recording_ui::save_on_quit(app);
                 app.state::<Editors>().shutdown();
             }
+            _ => {}
         });
 }
 

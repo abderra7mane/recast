@@ -2,9 +2,12 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
-import App from "@/App";
 import { Beautify } from "@/beautify/Beautify";
 import { Editor } from "@/editor/Editor";
+import { Library } from "@/library/Library";
+import { forwardToLogFile } from "@/logging";
+import { Onboarding } from "@/onboarding/Onboarding";
+import { Settings } from "@/settings/Settings";
 
 import "@/styles/styles.css";
 
@@ -16,13 +19,17 @@ function windowLabel() {
   }
 }
 
-function view() {
-  const label = windowLabel();
+function view(label: string) {
   if (label.startsWith("editor-")) return <Editor />;
   if (label.startsWith("beautify-")) return <Beautify />;
-  return <App />;
+  if (label === "settings") return <Settings />;
+  if (label === "onboarding") return <Onboarding />;
+  return <Library />;
 }
 
+const label = windowLabel();
+forwardToLogFile(label || "library");
+
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>{view()}</StrictMode>,
+  <StrictMode>{view(label)}</StrictMode>,
 );

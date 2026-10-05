@@ -19,9 +19,8 @@ use objc2::{
 use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSColor, NSCompositingOperation, NSDragOperation,
     NSDraggingContext, NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent,
-    NSFloatingWindowLevel, NSImage, NSPanel, NSResponder, NSScreen, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowSharingType,
-    NSWindowStyleMask,
+    NSFloatingWindowLevel, NSImage, NSPanel, NSResponder, NSTrackingArea, NSTrackingAreaOptions,
+    NSView, NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSData, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL,
@@ -276,14 +275,6 @@ thread_local! {
     static SHOWN: RefCell<Option<Shown>> = const { RefCell::new(None) };
 }
 
-fn screen_for(display_id: u32, mtm: MainThreadMarker) -> Option<Retained<NSScreen>> {
-    let screens = NSScreen::screens(mtm);
-    screens
-        .iter()
-        .find(|s| appkit::display_id(s) == Some(display_id))
-        .or_else(|| NSScreen::mainScreen(mtm))
-}
-
 pub struct Thumbnail {
     pub id: u64,
     pub png: Vec<u8>,
@@ -303,7 +294,7 @@ pub fn show(mtm: MainThreadMarker, thumbnail: Thumbnail, on_action: OnAction) {
         log::warn!("cannot show the thumbnail: unreadable image");
         return;
     };
-    let Some(screen) = screen_for(thumbnail.display_id, mtm) else {
+    let Some(screen) = appkit::screen_for(thumbnail.display_id, mtm) else {
         return;
     };
     let card = layout::card_size(thumbnail.size.0, thumbnail.size.1);

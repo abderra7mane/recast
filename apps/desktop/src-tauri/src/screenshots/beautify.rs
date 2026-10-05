@@ -78,15 +78,14 @@ pub fn open_window(app: &AppHandle, capture: Arc<Capture>) -> Result<(), String>
         .lock()
         .map_err(|e| e.to_string())?
         .insert(label.clone(), session);
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
-        .title(format!("Beautify — {}", capture.name))
-        .inner_size(1120.0, 720.0)
-        .min_inner_size(820.0, 520.0)
-        .theme(Some(tauri::Theme::Dark))
-        .build()
-        .map_err(|e| e.to_string())?;
-    // The thumbnail doesn't activate the app, so the new window has to.
-    let _ = window.set_focus();
+    // Also focuses the window, which the thumbnail can't do as it never activates the app.
+    let window = crate::activation::build(
+        WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+            .title(format!("Beautify — {}", capture.name))
+            .inner_size(1120.0, 720.0)
+            .min_inner_size(820.0, 520.0)
+            .theme(Some(tauri::Theme::Dark)),
+    )?;
     let app = app.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
@@ -197,7 +196,7 @@ pub async fn beautify_copy(
     copy_png(&png)
 }
 
-/// Saves to `path`, or under a new name in `~/Pictures/Recast` when there is none.
+/// Saves to `path`, or under a new name in the screenshots folder when there is none.
 /// Returns the saved file.
 #[tauri::command]
 #[specta::specta]
@@ -211,25 +210,23 @@ pub async fn beautify_save(
     let session = beautifiers.session(window.label())?;
     remember(&settings, &background);
     let name = format!("{} beautified", session.capture.name);
+    let dir = settings.get().screenshots.dir();
     let saved = tauri::async_runtime::spawn_blocking(move || {
         let png = session.render_png(&background)?;
-        save(&png, path.as_deref().map(Path::new), &name)
+        save(&png, path.as_deref().map(Path::new), &dir, &name)
     })
     .await
     .map_err(|e| e.to_string())??;
     Ok(saved.display().to_string())
 }
 
-fn save(png: &[u8], path: Option<&Path>, name: &str) -> Result<PathBuf, String> {
+fn save(png: &[u8], path: Option<&Path>, dir: &Path, name: &str) -> Result<PathBuf, String> {
     match path {
         Some(path) => std::fs::write(path, png)
             .map(|_| path.to_path_buf())
             .map_err(|e| format!("cannot save {}: {e}", path.display())),
-        None => {
-            let dir = files::screenshots_dir();
-            files::save_png(&dir, name, png)
-                .map_err(|e| format!("cannot save to {}: {e}", dir.display()))
-        }
+        None => files::save_png(dir, name, png)
+            .map_err(|e| format!("cannot save to {}: {e}", dir.display())),
     }
 }
 

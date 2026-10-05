@@ -19,6 +19,7 @@ use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowB
 use tauri_specta::Event;
 
 use super::{EditorInit, EditorSession, EditorStatus, PreviewStats, ProjectSummary};
+use crate::settings::SettingsStore;
 
 pub const LABEL_PREFIX: &str = "editor-";
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -122,13 +123,13 @@ pub fn open_editor_window(app: &AppHandle, path: &Path) -> Result<(), String> {
             export: None,
         },
     );
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
-        .title(title)
-        .inner_size(1440.0, 900.0)
-        .min_inner_size(1040.0, 660.0)
-        .theme(Some(tauri::Theme::Dark))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let window = crate::activation::build(
+        WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+            .title(title)
+            .inner_size(1440.0, 900.0)
+            .min_inner_size(1040.0, 660.0)
+            .theme(Some(tauri::Theme::Dark)),
+    )?;
     let app = app.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
@@ -161,8 +162,10 @@ pub fn open_editor_window(app: &AppHandle, path: &Path) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn list_projects() -> Vec<ProjectSummary> {
-    super::list_projects(&recast_project::default_root())
+pub async fn list_projects(
+    settings: State<'_, SettingsStore>,
+) -> Result<Vec<ProjectSummary>, String> {
+    Ok(super::list_projects(&settings.get().recording.dir()))
 }
 
 #[tauri::command]

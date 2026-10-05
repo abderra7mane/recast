@@ -19,9 +19,9 @@ use objc2::MainThreadMarker;
 use recast_capture::{ScreenCapture, Screenshot, picker::PickMode};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
-pub use clipboard::copy_png;
+pub use clipboard::{copy_png, copy_text};
 use thumbnail::{Action, Thumbnail};
 
 use crate::{
@@ -137,7 +137,7 @@ pub struct ScreenshotTaken {
     pub warnings: Vec<String>,
 }
 
-fn on_action(app: AppHandle, capture: Arc<Capture>) -> thumbnail::OnAction {
+fn on_action(app: AppHandle, capture: Arc<Capture>, dir: PathBuf) -> thumbnail::OnAction {
     Box::new(move |action| {
         match action {
             Action::Copy => {
@@ -145,7 +145,7 @@ fn on_action(app: AppHandle, capture: Arc<Capture>) -> thumbnail::OnAction {
                     log::warn!("{e}");
                 }
             }
-            Action::Save => match capture.save(&files::screenshots_dir()) {
+            Action::Save => match capture.save(&dir) {
                 Ok(path) => reveal(&path),
                 Err(e) => log::warn!("{e}"),
             },
@@ -169,18 +169,21 @@ async fn capture(
     options: ScreenshotSettings,
     mode: PickMode,
 ) -> Result<Option<ScreenshotTaken>, String> {
-    let Some(picked) = picker::pick(app, mode).await? else {
+    let Some(picker::Pick { picked, focus }) = picker::pick(app, mode).await? else {
         return Ok(None);
     };
+    focus.restore_from(app);
     let cache = cache_dir(app)?;
     let target = picked.target.clone();
     let save = options.save_to_disk;
+    let dir = options.dir();
+    let save_dir = dir.clone();
     let capture = tauri::async_runtime::spawn_blocking(move || {
         let shot = recast_capture::platform()
             .screenshot(&target)
             .map_err(|e| e.to_string())?;
         let name = files::capture_name(chrono::Local::now());
-        Capture::store(shot, name, save, &files::screenshots_dir(), &cache)
+        Capture::store(shot, name, save, &save_dir, &cache)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -203,7 +206,7 @@ async fn capture(
     let handler_capture = capture.clone();
     app.run_on_main_thread(move || {
         let mtm = MainThreadMarker::new().expect("runs on the main thread");
-        thumbnail::show(mtm, shown, on_action(handler_app, handler_capture));
+        thumbnail::show(mtm, shown, on_action(handler_app, handler_capture, dir));
     })
     .map_err(|e| e.to_string())?;
 
@@ -217,17 +220,11 @@ async fn capture(
 }
 
 /// Picks a target, captures it and shows the thumbnail; `None` when the user cancels.
-#[tauri::command]
-#[specta::specta]
-pub async fn take_screenshot(
-    app: AppHandle,
-    settings: State<'_, SettingsStore>,
-    mode: PickMode,
-) -> Result<Option<ScreenshotTaken>, String> {
-    let options = settings.get().screenshots;
-    let main = picker::hide_main(&app);
-    let taken = capture(&app, options, mode).await;
-    picker::show_main(main);
+pub async fn take(app: &AppHandle, mode: PickMode) -> Result<Option<ScreenshotTaken>, String> {
+    let options = app.state::<SettingsStore>().get().screenshots;
+    let library = picker::hide_library(app);
+    let taken = capture(app, options, mode).await;
+    picker::show_library(library);
     taken
 }
 

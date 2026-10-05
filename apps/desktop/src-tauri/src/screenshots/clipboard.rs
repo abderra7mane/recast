@@ -1,6 +1,9 @@
 use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardTypePNG, NSPasteboardWriting};
-use objc2_foundation::{NSArray, NSData};
+use objc2_app_kit::{
+    NSPasteboard, NSPasteboardItem, NSPasteboardTypePNG, NSPasteboardTypeString,
+    NSPasteboardWriting,
+};
+use objc2_foundation::{NSArray, NSData, NSString};
 
 /// Puts a PNG image on the general pasteboard.
 pub fn copy_png(png: &[u8]) -> Result<(), String> {
@@ -18,5 +21,19 @@ pub fn copy_png(png: &[u8]) -> Result<(), String> {
         Ok(())
     } else {
         Err("cannot copy the image to the clipboard".into())
+    }
+}
+
+/// Puts plain text on the general pasteboard.
+pub fn copy_text(text: &str) -> Result<(), String> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    // SAFETY: the type is an AppKit constant.
+    let set =
+        pasteboard.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
+    if set {
+        Ok(())
+    } else {
+        Err("cannot copy to the clipboard".into())
     }
 }

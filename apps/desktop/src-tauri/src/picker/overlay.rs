@@ -9,9 +9,9 @@ use objc2::{
     rc::Retained, runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezierPath, NSColor, NSCursor, NSEvent, NSPanel, NSResponder, NSScreen,
+    NSBackingStoreType, NSBezierPath, NSColor, NSCursor, NSEvent, NSResponder, NSScreen,
     NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindingRule,
-    NSWindow, NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
+    NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use recast_capture::picker::{
@@ -21,7 +21,7 @@ use recast_capture::picker::{
 use recast_project::Rect;
 
 use super::cursor;
-use crate::appkit::{self, TextStyle, color, fill, inset, ns_rect};
+use crate::appkit::{self, KeyPanel, TextStyle, color, fill, inset, ns_rect};
 
 const KEY_ESCAPE: u16 = 53;
 const KEY_SPACE: u16 = 49;
@@ -32,29 +32,13 @@ struct Session {
     picker: Picker,
     main_height: f64,
     shown: Highlight,
-    panels: Vec<Retained<PickerPanel>>,
+    panels: Vec<Retained<KeyPanel>>,
     views: Vec<Retained<OverlayView>>,
     cursor: Retained<NSCursor>,
     done: Option<Done>,
 }
 
 type Shared = Rc<RefCell<Session>>;
-
-define_class!(
-    // SAFETY: NSPanel has no subclassing requirements; only a getter is overridden.
-    #[unsafe(super(NSPanel, NSWindow, NSResponder, NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "RecastPickerPanel"]
-    struct PickerPanel;
-
-    impl PickerPanel {
-        /// Borderless windows can't become key by default, and keys are needed for Space and Esc.
-        #[unsafe(method(canBecomeKeyWindow))]
-        fn can_become_key_window(&self) -> bool {
-            true
-        }
-    }
-);
 
 pub struct ViewIvars {
     display: usize,
@@ -326,12 +310,12 @@ fn region_label(text: &str, selection: NSRect, bounds: NSRect) {
     draw_pill(&style, text, NSRect::new(NSPoint::new(x, y), size));
 }
 
-fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<PickerPanel> {
+fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<KeyPanel> {
     let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel;
     // SAFETY: NSPanel's designated initializer with valid arguments.
-    let panel: Retained<PickerPanel> = unsafe {
+    let panel: Retained<KeyPanel> = unsafe {
         msg_send![
-            PickerPanel::alloc(mtm),
+            KeyPanel::alloc(mtm),
             initWithContentRect: frame,
             styleMask: style,
             backing: NSBackingStoreType::Buffered,

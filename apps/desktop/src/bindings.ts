@@ -7,55 +7,52 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
-	listDisplays: () => typedError<DisplayInfo[], string>(__TAURI_INVOKE("list_displays")),
-	listWindows: () => typedError<WindowInfo[], string>(__TAURI_INVOKE("list_windows")),
 	checkPermissions: () => __TAURI_INVOKE<Permissions>("check_permissions"),
 	requestPermission: (permission: Permission) => __TAURI_INVOKE<PermissionState>("request_permission", { permission }),
-	startRecording: (request: RecordingRequest) => typedError<RecordingStatus, string>(__TAURI_INVOKE("start_recording", { request })),
-	recordingStatus: () => typedError<{
-	bundlePath: string,
-	elapsedMs: number | null,
-	width: number,
-	height: number,
-	/**  False when Input Monitoring is missing, so clicks are not recorded. */
-	inputEvents: boolean,
-	problems: string[],
-} | null, string>(__TAURI_INVOKE("recording_status")),
-	stopRecording: () => typedError<FinishedRecording, string>(__TAURI_INVOKE("stop_recording")),
+	openPrivacySettings: (permission: Permission) => typedError<null, string>(__TAURI_INVOKE("open_privacy_settings", { permission })),
+	/**  Quits and opens Recast again through Launch Services. */
+	relaunch: () => typedError<null, string>(__TAURI_INVOKE("relaunch")),
+	/**  Remembers that onboarding is done and closes its window. */
+	completeOnboarding: () => typedError<AppSettings, string>(__TAURI_INVOKE("complete_onboarding")),
+	/**  Picks a target and starts recording it, after the countdown when that is on. */
+	startRecording: () => typedError<null, string>(__TAURI_INVOKE("start_recording")),
+	stopRecording: () => __TAURI_INVOKE<void>("stop_recording"),
+	recordingPhase: () => typedError<Phase, string>(__TAURI_INVOKE("recording_phase")),
 	listUnfinished: () => typedError<UnfinishedBundle[], string>(__TAURI_INVOKE("list_unfinished")),
 	recoverBundle: (path: string) => typedError<FinishedRecording, string>(__TAURI_INVOKE("recover_bundle", { path })),
 	discardUnfinished: (path: string) => typedError<null, string>(__TAURI_INVOKE("discard_unfinished", { path })),
-	revealInFinder: (path: string) => typedError<null, string>(__TAURI_INVOKE("reveal_in_finder", { path })),
+	revealInFinder: (path: string) => __TAURI_INVOKE<void>("reveal_in_finder", { path }),
+	openRecordingsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_recordings_folder")),
+	openWindow: (window: AppWindow) => typedError<null, string>(__TAURI_INVOKE("open_window", { window })),
 	getSettings: () => typedError<AppSettings, string>(__TAURI_INVOKE("get_settings")),
 	setScreenshotSettings: (screenshots: ScreenshotSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_screenshot_settings", { screenshots })),
-	pickTarget: (mode: PickMode) => typedError<{
-	target: CaptureTarget,
-	/**  The display the target was picked on. */
-	displayId: number,
-	/**  The picked area in global points. */
-	bounds: Rect,
-	label: string,
-} | null, string>(__TAURI_INVOKE("pick_target", { mode })),
-	/**  Picks a target, captures it and shows the thumbnail; `None` when the user cancels. */
-	takeScreenshot: (mode: PickMode) => typedError<{
-	/**  The saved file, when saving is on. */
-	path: string | null,
-	width: number,
-	height: number,
-	copied: boolean,
-	/**  Problems that didn't stop the capture, such as a failed clipboard copy. */
-	warnings: string[],
-} | null, string>(__TAURI_INVOKE("take_screenshot", { mode })),
+	setRecordingSettings: (recording: RecordingSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_recording_settings", { recording })),
+	setUpdateSettings: (updates: UpdateSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_update_settings", { updates })),
+	/**
+	 *  Changes an action's shortcut, `None` turning it off. A conflict is an error and
+	 *  changes nothing; a shortcut macOS refuses is kept and reported in its status.
+	 */
+	setShortcut: (action: ShortcutAction, shortcut: string | null) => typedError<ShortcutStatus[], string>(__TAURI_INVOKE("set_shortcut", { action, shortcut })),
+	shortcutStatuses: () => __TAURI_INVOKE<ShortcutStatus[]>("shortcut_statuses"),
+	/**  Turns the global shortcuts off while the Settings window records a new one. */
+	suspendShortcuts: (suspended: boolean) => __TAURI_INVOKE<ShortcutStatus[]>("suspend_shortcuts", { suspended }),
+	getLaunchAtLogin: () => __TAURI_INVOKE<LoginItem>("get_launch_at_login"),
+	setLaunchAtLogin: (enabled: boolean) => typedError<LoginItem, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
+	openLoginItemsSettings: () => __TAURI_INVOKE<void>("open_login_items_settings"),
+	checkForUpdates: () => __TAURI_INVOKE<void>("check_for_updates"),
+	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
+	openLogsFolder: () => __TAURI_INVOKE<void>("open_logs_folder"),
+	copyDiagnostics: () => typedError<null, string>(__TAURI_INVOKE("copy_diagnostics")),
 	beautifyOpen: () => typedError<BeautifyInit, string>(__TAURI_INVOKE("beautify_open")),
 	/**  The beautified screenshot scaled to fit `max_width × max_height` pixels, as a PNG data URL. */
 	beautifyPreview: (background: BackgroundSettings, maxWidth: number, maxHeight: number) => typedError<string, string>(__TAURI_INVOKE("beautify_preview", { background, maxWidth, maxHeight })),
 	beautifyCopy: (background: BackgroundSettings) => typedError<null, string>(__TAURI_INVOKE("beautify_copy", { background })),
 	/**
-	 *  Saves to `path`, or under a new name in `~/Pictures/Recast` when there is none.
+	 *  Saves to `path`, or under a new name in the screenshots folder when there is none.
 	 *  Returns the saved file.
 	 */
 	beautifySave: (background: BackgroundSettings, path: string | null) => typedError<string, string>(__TAURI_INVOKE("beautify_save", { background, path })),
-	listProjects: () => __TAURI_INVOKE<ProjectSummary[]>("list_projects"),
+	listProjects: () => typedError<ProjectSummary[], string>(__TAURI_INVOKE("list_projects")),
 	openEditor: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_editor", { path })),
 	/**  Starts the session of the calling editor window (or returns the running one). */
 	editorOpen: () => typedError<EditorInit, string>(__TAURI_INVOKE("editor_open")),
@@ -85,14 +82,26 @@ export const commands = {
 export const events = {
 	exportFinished: makeEvent<ExportFinished>("export-finished"),
 	exportProgress: makeEvent<ExportProgress>("export-progress"),
+	recordingChanged: makeEvent<RecordingChanged>("recording-changed"),
 };
 
 /* Types */
+export type AppInfo = {
+	version: string,
+	logsDir: string,
+};
+
 export type AppSettings = {
 	screenshots?: ScreenshotSettings,
 	/**  The last background used to beautify a screenshot. */
 	beautify?: BackgroundSettings,
+	recording?: RecordingSettings,
+	shortcuts?: ShortcutSettings,
+	updates?: UpdateSettings,
+	onboardingCompleted?: boolean,
 };
+
+export type AppWindow = "library" | "settings" | "onboarding";
 
 /**  Gains from 0 (muted) to 2. */
 export type AudioMix = {
@@ -133,10 +142,6 @@ export type BeautifyInit = {
 
 export type CaptureSource = { kind: "display"; displayId: number } | { kind: "window"; windowId: number; title: string | null; appName: string | null } | { kind: "region"; displayId: number; rect: Rect };
 
-export type CaptureTarget = { kind: "display"; displayId: number } | { kind: "window"; windowId: number } | 
-/**  `rect` is in points, relative to the display's top-left corner. */
-{ kind: "region"; displayId: number; rect: Rect };
-
 export type ClickMarker = {
 	tMs: number | null,
 	button: MouseButton,
@@ -161,14 +166,6 @@ export type CursorSettings = {
 	/**  0 follows the recorded path exactly; 1 is the smoothest. */
 	smoothing?: number | null,
 	hideWhenIdle?: boolean,
-};
-
-export type DisplayInfo = {
-	id: number,
-	name: string,
-	/**  Global display points. */
-	bounds: Rect,
-	scaleFactor: number | null,
 };
 
 /**
@@ -239,6 +236,10 @@ export type FinishedRecording = {
 
 export type FrameRate = "30" | "60";
 
+export type LoginItem = "enabled" | "disabled" | 
+/**  The user has to allow it in System Settings → General → Login Items. */
+"needsApproval";
+
 export type MouseButton = "left" | "right" | "other";
 
 export type Permission = "screenRecording" | "inputMonitoring" | "microphone";
@@ -251,23 +252,9 @@ export type Permissions = {
 	microphone: PermissionState,
 };
 
-/**  What the picker highlights first; Space switches to and from [`PickMode::Display`]. */
-export type PickMode = 
-/**  Nothing is highlighted until a drag selects a region. */
-"area" | 
-/**  The window under the pointer is highlighted; a click picks it. */
-"window" | 
-/**  The display under the pointer is highlighted; a click picks it. */
-"display";
-
-export type Picked = {
-	target: CaptureTarget,
-	/**  The display the target was picked on. */
-	displayId: number,
-	/**  The picked area in global points. */
-	bounds: Rect,
-	label: string,
-};
+export type Phase = { kind: "idle" } | { kind: "picking" } | { kind: "countdown" } | 
+/**  The countdown is over and capture is starting. */
+{ kind: "starting" } | { kind: "recording"; elapsedMs: number | null } | { kind: "stopping" };
 
 export type PreviewStats = {
 	frames: number,
@@ -314,20 +301,17 @@ export type Recording = {
 	recovered: boolean,
 };
 
-export type RecordingRequest = {
-	target: CaptureTarget,
-	systemAudio: boolean,
-	mic: boolean,
+export type RecordingChanged = {
+	phase: Phase,
 };
 
-export type RecordingStatus = {
-	bundlePath: string,
-	elapsedMs: number | null,
-	width: number,
-	height: number,
-	/**  False when Input Monitoring is missing, so clicks are not recorded. */
-	inputEvents: boolean,
-	problems: string[],
+export type RecordingSettings = {
+	/**  Counts down from 3 before recording starts. */
+	countdown?: boolean,
+	mic?: boolean,
+	systemAudio?: boolean,
+	/**  Where recordings are saved; `None` means `~/Movies/Recast`. */
+	folder?: string | null,
 };
 
 export type Rect = {
@@ -342,18 +326,9 @@ export type Resolution = "1080p" | "1440p" | "4k";
 
 export type ScreenshotSettings = {
 	copyToClipboard?: boolean,
-	/**  Saves every capture to `~/Pictures/Recast`. */
 	saveToDisk?: boolean,
-};
-
-export type ScreenshotTaken = {
-	/**  The saved file, when saving is on. */
-	path: string | null,
-	width: number,
-	height: number,
-	copied: boolean,
-	/**  Problems that didn't stop the capture, such as a failed clipboard copy. */
-	warnings: string[],
+	/**  Where captures are saved; `None` means `~/Pictures/Recast`. */
+	folder?: string | null,
 };
 
 /**  Sizes are fractions of the screen's shorter side. */
@@ -361,6 +336,25 @@ export type Shadow = {
 	opacity?: number | null,
 	blur?: number | null,
 	offsetY?: number | null,
+};
+
+export type ShortcutAction = "record" | "captureArea" | "captureWindow";
+
+/**  Global shortcuts in the form `Alt+Shift+Cmd+KeyR`; `None` turns one off. */
+export type ShortcutSettings = {
+	record?: string | null,
+	captureArea?: string | null,
+	captureWindow?: string | null,
+};
+
+export type ShortcutStatus = {
+	action: ShortcutAction,
+	/**  The stored shortcut, `None` when turned off. */
+	shortcut: string | null,
+	/**  How macOS shows it, such as `⌥⇧⌘R`. */
+	symbols: string | null,
+	/**  Why it doesn't work: a conflict or macOS refusing to register it. */
+	error: string | null,
 };
 
 export type SoundPack = "softTap" | "mouseClick" | "mechanical";
@@ -388,18 +382,14 @@ export type UnfinishedBundle = {
 	problem: string | null,
 };
 
+export type UpdateSettings = {
+	checkAutomatically?: boolean,
+};
+
 export type VideoTrack = {
 	file: string,
 	codec: string,
 	durationMs: number | null,
-};
-
-export type WindowInfo = {
-	id: number,
-	title: string,
-	appName: string,
-	/**  Global display points. */
-	bounds: Rect,
 };
 
 export type ZoomFocus = { kind: "followCursor" } | 

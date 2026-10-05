@@ -1,14 +1,33 @@
 //! Small AppKit helpers shared by the picker overlay and the screenshot thumbnail.
 
 use dispatch2::{DispatchQueue, MainThreadBound};
-use objc2::{AllocAnyThread, MainThreadMarker, rc::Retained, runtime::AnyObject};
+use objc2::{
+    AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, rc::Retained,
+    runtime::AnyObject,
+};
 use objc2_app_kit::{
     NSBezierPath, NSBitmapImageRep, NSColor, NSCursor, NSDeviceRGBColorSpace, NSFont,
-    NSFontAttributeName, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSScreen,
-    NSStringDrawing,
+    NSFontAttributeName, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSPanel,
+    NSResponder, NSScreen, NSStringDrawing, NSWindow,
 };
-use objc2_foundation::{NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSDictionary, NSNumber, NSObject, NSPoint, NSRect, NSSize, NSString};
 use recast_project::Rect;
+
+define_class!(
+    // SAFETY: NSPanel has no subclassing requirements; only a getter is overridden.
+    #[unsafe(super(NSPanel, NSWindow, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RecastKeyPanel"]
+    /// A panel that can become key without a title bar, so it receives Esc and Space.
+    pub struct KeyPanel;
+
+    impl KeyPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> bool {
+            true
+        }
+    }
+);
 
 pub fn ns_rect(r: &Rect) -> NSRect {
     NSRect::new(NSPoint::new(r.x, r.y), NSSize::new(r.width, r.height))
@@ -57,7 +76,10 @@ pub struct TextStyle(Retained<NSDictionary<NSString, AnyObject>>);
 impl TextStyle {
     pub fn new(size: f64, color: &NSColor) -> Self {
         // SAFETY: the weight constant is a plain float exported by AppKit.
-        let weight = unsafe { NSFontWeightSemibold };
+        Self::with_weight(size, unsafe { NSFontWeightSemibold }, color)
+    }
+
+    pub fn with_weight(size: f64, weight: f64, color: &NSColor) -> Self {
         let font = NSFont::monospacedDigitSystemFontOfSize_weight(size, weight);
         // SAFETY: the attribute names are AppKit constants.
         let keys = unsafe { [NSFontAttributeName, NSForegroundColorAttributeName] };
@@ -131,6 +153,14 @@ pub fn display_id(screen: &NSScreen) -> Option<u32> {
         .objectForKey(&key)
         .and_then(|value| value.downcast::<NSNumber>().ok())
         .map(|n| n.unsignedIntValue())
+}
+
+/// The screen showing display `id`, or the main screen when it is gone.
+pub fn screen_for(id: u32, mtm: MainThreadMarker) -> Option<Retained<NSScreen>> {
+    NSScreen::screens(mtm)
+        .iter()
+        .find(|s| display_id(s) == Some(id))
+        .or_else(|| NSScreen::mainScreen(mtm))
 }
 
 /// Height of the main display in points, which AppKit's global coordinates flip around.
