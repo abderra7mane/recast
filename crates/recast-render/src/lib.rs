@@ -5,10 +5,11 @@ pub mod bitmap;
 mod compositor;
 pub mod cursor;
 pub mod layout;
+pub mod nv12;
 mod scene;
 
 pub use compositor::Compositor;
-pub use scene::{Scene, SceneParts};
+pub use scene::{Scene, SceneParts, resolve};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

@@ -3,7 +3,7 @@ PNPM := pnpm --dir $(DESKTOP)
 # The local Apple Development certificate keeps macOS permissions across rebuilds.
 SIGNING_IDENTITY ?= Apple Development
 
-.PHONY: help install dev build bindings test test-rust test-ui lint lint-rust lint-ui fmt record simulate export update-goldens sounds unfinished recover discard permissions clean
+.PHONY: help install dev build bindings test test-rust test-ui lint lint-rust lint-ui fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions clean
 
 help:
 	@echo "install   install JS dependencies"
@@ -16,6 +16,7 @@ help:
 	@echo "record    record from the CLI: make record ARGS='--seconds 5 --display'"
 	@echo "simulate  record generated video/audio/input (no permissions needed): make simulate ARGS='--seconds 5'"
 	@echo "export    export a bundle to MP4: make export BUNDLE=path ARGS='--set export.fps=30 --out out.mp4'"
+	@echo "bench-preview measure editor preview seek latency and frame rate: make bench-preview BUNDLE=path [PROFILE=dev]"
 	@echo "update-goldens  re-render the golden frames of the compositor tests"
 	@echo "sounds    regenerate the bundled click sounds"
 	@echo "unfinished list bundles left by a crash"
@@ -68,6 +69,11 @@ simulate:
 
 export:
 	$(CLI) export "$(BUNDLE)" $(ARGS)
+
+PROFILE ?= release
+
+bench-preview:
+	cargo run --quiet --profile $(PROFILE) -p recast-desktop --example preview-bench -- "$(BUNDLE)"
 
 update-goldens:
 	UPDATE_GOLDENS=1 cargo test -p recast-render --test golden

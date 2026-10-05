@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Circle, FolderOpen, RefreshCw, Square } from "lucide-react";
+import { Circle, FolderOpen, Pencil, RefreshCw, Square } from "lucide-react";
 
 import {
   commands,
@@ -8,6 +8,7 @@ import {
   type Permission,
   type Permissions,
   type PermissionState,
+  type ProjectSummary,
   type RecordingStatus,
   type UnfinishedBundle,
   type WindowInfo,
@@ -327,13 +328,21 @@ function SavedCard({ result }: { result: FinishedRecording }) {
           {recording.systemAudio ? "system audio" : "no system audio"} ·{" "}
           {recording.mic ? "mic" : "no mic"}
         </span>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => commands.revealInFinder(result.bundlePath)}
-        >
-          <FolderOpen /> Show in Finder
-        </Button>
+        <div className="flex shrink-0 gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => commands.revealInFinder(result.bundlePath)}
+          >
+            <FolderOpen /> Show in Finder
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => commands.openEditor(result.bundlePath)}
+          >
+            <Pencil /> Edit
+          </Button>
+        </div>
       </CardContent>
       {result.warnings.length > 0 && (
         <CardContent className="space-y-1">
@@ -344,6 +353,50 @@ function SavedCard({ result }: { result: FinishedRecording }) {
           ))}
         </CardContent>
       )}
+    </Card>
+  );
+}
+
+function RecordingsCard({ projects }: { projects: ProjectSummary[] }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Recordings</CardTitle>
+        <CardDescription>In ~/Movies/Recast</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {projects.length === 0 && (
+          <p className="text-muted-foreground text-sm">No recordings yet.</p>
+        )}
+        {projects.map((project) => (
+          <div
+            key={project.path}
+            className="flex items-center justify-between gap-2"
+          >
+            <div className="min-w-0">
+              <p className="truncate text-sm" title={project.path}>
+                {project.name}
+              </p>
+              <p className="text-muted-foreground text-xs">
+                {formatElapsed(project.durationMs ?? 0)} · {project.width}×
+                {project.height}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                const result = await commands.openEditor(project.path);
+                setError(result.status === "error" ? result.error : null);
+              }}
+            >
+              <Pencil /> Edit
+            </Button>
+          </div>
+        ))}
+        {error && <p className="text-destructive text-sm">{error}</p>}
+      </CardContent>
     </Card>
   );
 }
@@ -363,10 +416,12 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<FinishedRecording | null>(null);
   const [unfinished, setUnfinished] = useState<UnfinishedBundle[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
 
   const refreshUnfinished = useCallback(async () => {
     const result = await commands.listUnfinished();
     if (result.status === "ok") setUnfinished(result.data);
+    setProjects(await commands.listProjects());
   }, []);
 
   useEffect(() => {
@@ -582,6 +637,8 @@ export default function App() {
         }}
         onDiscarded={() => void refreshUnfinished()}
       />
+
+      <RecordingsCard projects={projects} />
     </main>
   );
 }

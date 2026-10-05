@@ -25,6 +25,7 @@ pub struct Scene {
     /// Size of the recorded area in points.
     pub screen_width: f64,
     pub screen_height: f64,
+    bounds: Rect,
     cursors: HashMap<u32, CursorImage>,
     default_cursor: CursorImage,
     pub background: Option<Rgba>,
@@ -50,6 +51,7 @@ impl Scene {
             timeline,
             screen_width: parts.bounds.width,
             screen_height: parts.bounds.height,
+            bounds: parts.bounds,
             cursors: parts.cursors,
             default_cursor: default_arrow(4.0),
             background: parts.background,
@@ -104,9 +106,32 @@ impl Scene {
         }))
     }
 
-    /// Changes whenever a scene is built, so renderers know to reload its images.
+    /// Changes whenever the scene's images change, so renderers know to reload them.
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Applies new settings; the timeline is rebuilt only when its settings changed.
+    /// A new background image path needs [`Scene::set_background`] too.
+    pub fn set_settings(&mut self, events: &EventLog, settings: EditSettings) {
+        let duration_ms = self.timeline.duration_ms();
+        let settings = settings.sanitized(duration_ms);
+        if settings.zoom != self.settings.zoom || settings.cursor != self.settings.cursor {
+            self.timeline = Timeline::new(events, &self.bounds, &settings, duration_ms);
+        }
+        let image = |s: &EditSettings| match &s.background.fill {
+            BackgroundFill::Image { path } => Some(path.clone()),
+            _ => None,
+        };
+        if image(&settings) != image(&self.settings) {
+            self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        }
+        self.settings = settings;
+    }
+
+    pub fn set_background(&mut self, background: Option<Rgba>) {
+        self.background = background;
+        self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The cursor image for a recorded shape, or the default arrow.
@@ -139,7 +164,8 @@ impl Scene {
     }
 }
 
-fn resolve(bundle_dir: &Path, path: &str) -> PathBuf {
+/// Resolves a background image path, which may be relative to the bundle.
+pub fn resolve(bundle_dir: &Path, path: &str) -> PathBuf {
     let path = Path::new(path);
     if path.is_absolute() {
         path.to_path_buf()

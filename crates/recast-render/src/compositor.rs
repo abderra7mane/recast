@@ -57,6 +57,7 @@ struct SceneTextures {
 pub struct Compositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
     width: u32,
     height: u32,
     target: wgpu::Texture,
@@ -164,6 +165,46 @@ fn pipeline(
     })
 }
 
+/// The frame texture and its readback buffer, with the buffer's row stride.
+fn size_resources(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> Result<(wgpu::Texture, wgpu::Buffer, u32)> {
+    let max = device.limits().max_texture_dimension_2d;
+    if width == 0 || height == 0 || width > max || height > max {
+        return Err(Error::Gpu(format!(
+            "frame size {width}×{height} is outside 1…{max}"
+        )));
+    }
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("frame"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let padded_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: padded_row as u64 * height as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    Ok((target, readback, padded_row))
+}
+
 impl Compositor {
     /// A compositor drawing `width × height` frames in `format`, without a window.
     pub fn new(width: u32, height: u32, format: PixelFormat) -> Result<Self> {
@@ -182,39 +223,7 @@ impl Compositor {
             ..Default::default()
         }))
         .map_err(|e| Error::Gpu(format!("cannot open the GPU: {e}")))?;
-        let max = device.limits().max_texture_dimension_2d;
-        if width == 0 || height == 0 || width > max || height > max {
-            return Err(Error::Gpu(format!(
-                "frame size {width}×{height} is outside 1…{max}"
-            )));
-        }
-
         let target_format = texture_format(format);
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("frame"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: target_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let padded_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: padded_row as u64 * height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite"),
             entries: &[
@@ -272,9 +281,11 @@ impl Compositor {
             ..Default::default()
         });
 
+        let (target, readback, padded_row) = size_resources(&device, target_format, width, height)?;
         Ok(Self {
             device,
             queue,
+            format: target_format,
             width,
             height,
             target,
@@ -295,6 +306,23 @@ impl Compositor {
 
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Changes the frame size, keeping the GPU device and pipelines.
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<()> {
+        if (width, height) == (self.width, self.height) {
+            return Ok(());
+        }
+        let (target, readback, padded_row) =
+            size_resources(&self.device, self.format, width, height)?;
+        self.target = target;
+        self.readback = readback;
+        self.padded_row = padded_row;
+        self.width = width;
+        self.height = height;
+        self.scene = None;
+        self.composite_bind = None;
+        Ok(())
     }
 
     /// The rendered frame, for drawing it elsewhere on the GPU.

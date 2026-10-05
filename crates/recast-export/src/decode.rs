@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use cidre::{arc, av, cm, cv, ns};
 use recast_render::{CpuFrame, FrameSource, PixelFormat};
@@ -66,15 +69,19 @@ fn next_sample(
     Ok(next)
 }
 
+/// Frame ids are unique in the process, so a renderer never mistakes a frame from
+/// one decoder for a frame from another.
+static NEXT_FRAME_ID: AtomicU64 = AtomicU64::new(1);
+
 /// A decoded BGRA frame whose pixels stay locked while it is held.
 struct LockedFrame {
     pixels: arc::R<cv::PixelBuf>,
     pts_ms: f64,
-    index: u64,
+    id: u64,
 }
 
 impl LockedFrame {
-    fn new(sample: &cm::SampleBuf, index: u64) -> Result<Self> {
+    fn new(sample: &cm::SampleBuf) -> Result<Self> {
         let mut pixels = sample
             .image_buf()
             .ok_or_else(|| Error::Media("video sample without an image".into()))?
@@ -86,7 +93,7 @@ impl LockedFrame {
         Ok(Self {
             pixels,
             pts_ms: sample.pts().as_secs() * 1000.0,
-            index,
+            id: NEXT_FRAME_ID.fetch_add(1, Ordering::Relaxed),
         })
     }
 
@@ -103,7 +110,7 @@ impl LockedFrame {
             bytes_per_row: stride,
             format: PixelFormat::Bgra8,
             data,
-            id: Some(self.index),
+            id: Some(self.id),
         }
     }
 }
@@ -125,7 +132,6 @@ pub struct VideoDecoder {
     output: arc::R<av::AssetReaderTrackOutput>,
     current: Option<LockedFrame>,
     next: Option<LockedFrame>,
-    decoded: u64,
     ended: bool,
 }
 
@@ -148,7 +154,6 @@ impl VideoDecoder {
             output,
             current: None,
             next: None,
-            decoded: 0,
             ended: false,
         })
     }
@@ -158,15 +163,17 @@ impl VideoDecoder {
             return Ok(None);
         }
         match next_sample(&self.reader, &mut self.output)? {
-            Some(sample) => {
-                self.decoded += 1;
-                LockedFrame::new(&sample, self.decoded).map(Some)
-            }
+            Some(sample) => LockedFrame::new(&sample).map(Some),
             None => {
                 self.ended = true;
                 Ok(None)
             }
         }
+    }
+
+    /// Presentation time of the frame shown last.
+    pub fn current_ms(&self) -> Option<f64> {
+        self.current.as_ref().map(|f| f.pts_ms)
     }
 
     fn advance_to(&mut self, t_ms: f64) -> Result<()> {
@@ -202,10 +209,17 @@ pub struct AudioDecoder {
     pending: Vec<f32>,
     pos: usize,
     ended: bool,
+    /// Where reading starts, until the first buffer lines up with it.
+    start_ms: Option<f64>,
 }
 
 impl AudioDecoder {
     pub fn open(path: &Path) -> Result<Option<Self>> {
+        Self::open_at(path, 0.0)
+    }
+
+    /// Opens `path` so that the first sample read is the one at `start_ms`.
+    pub fn open_at(path: &Path, start_ms: f64) -> Result<Option<Self>> {
         let Some(track) = load_track(path, av::MediaType::audio())? else {
             return Ok(None);
         };
@@ -233,13 +247,15 @@ impl AudioDecoder {
             pcm::is_big_endian(),
             ns::Number::with_bool(false).as_id_ref(),
         );
-        let (reader, output) = reader(&track, &settings, None)?;
+        let start_ms = start_ms.max(0.0);
+        let (reader, output) = reader(&track, &settings, Some(start_ms / 1000.0))?;
         Ok(Some(Self {
             reader,
             output,
             pending: Vec::new(),
             pos: 0,
             ended: false,
+            start_ms: Some(start_ms),
         }))
     }
 
@@ -259,12 +275,27 @@ impl AudioDecoder {
             .copy_to(0, &mut bytes)
             .map_err(|e| Error::Media(format!("cannot read audio: {e:?}")))?;
         self.pending.clear();
+        self.pos = 0;
+        if let Some(start_ms) = self.start_ms.take() {
+            let pts_ms = sample.pts().as_secs() * 1000.0;
+            let offset = ((start_ms - pts_ms) * SAMPLE_RATE as f64 / 1000.0).round() as i64 * 2;
+            if offset < 0 {
+                self.pending.resize((-offset) as usize, 0.0);
+            } else {
+                self.pos = offset as usize;
+            }
+        }
         self.pending.extend(
             bytes
                 .chunks_exact(4)
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
         );
-        self.pos = 0;
+        if self.pos > self.pending.len() {
+            let rest = self.pos - self.pending.len();
+            self.pending.clear();
+            self.pos = 0;
+            self.skip(rest)?;
+        }
         Ok(true)
     }
 
@@ -323,8 +354,10 @@ mod tests {
         );
     }
 
-    fn frame_id(decoder: &mut VideoDecoder, t_ms: f64) -> u64 {
-        decoder.frame_at(t_ms).unwrap().id.unwrap()
+    /// The 60 fps frame number shown at `t_ms`.
+    fn shown(decoder: &mut VideoDecoder, t_ms: f64) -> i64 {
+        decoder.frame_at(t_ms).unwrap();
+        (decoder.current_ms().unwrap() * 60.0 / 1000.0).round() as i64
     }
 
     #[test]
@@ -334,20 +367,28 @@ mod tests {
         variable_rate_video(&path);
 
         let mut decoder = VideoDecoder::open(&path, 0.0).unwrap();
-        assert_eq!(frame_id(&mut decoder, 0.0), 1);
-        assert!(decoder.current.as_ref().unwrap().pts_ms.abs() < 1e-6);
-        assert_eq!(frame_id(&mut decoder, 1000.0 / 60.0), 2);
-        assert_eq!(frame_id(&mut decoder, 1000.0 / 60.0 * 1.5), 2);
-        let held = frame_id(&mut decoder, 990.0);
-        assert_eq!(held, 60);
-        assert_eq!(frame_id(&mut decoder, 1_500.0), held);
-        assert_eq!(frame_id(&mut decoder, 1_999.0), held);
-        assert_eq!(frame_id(&mut decoder, 2_000.0), held + 1);
+        assert!(decoder.frame_at(0.0).unwrap().id.is_some());
+        assert!(decoder.current_ms().unwrap().abs() < 1e-6);
+        assert_eq!(shown(&mut decoder, 1000.0 / 60.0), 1);
+        assert_eq!(shown(&mut decoder, 1000.0 / 60.0 * 1.5), 1);
+        assert_eq!(shown(&mut decoder, 990.0), 59);
+        assert_eq!(shown(&mut decoder, 1_500.0), 59);
+        assert_eq!(shown(&mut decoder, 1_999.0), 59);
+        assert_eq!(shown(&mut decoder, 2_000.0), 120);
         let frame = decoder.frame_at(2_500.0).unwrap();
         assert_eq!((frame.width, frame.height), (64, 48));
         assert!(frame.bytes_per_row >= 64 * 4);
-        let last = frame_id(&mut decoder, 10_000.0);
-        assert_eq!(last, 120);
+        assert_eq!(shown(&mut decoder, 10_000.0), 179);
+    }
+
+    #[test]
+    fn frame_ids_differ_between_decoders() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("screen.mp4");
+        variable_rate_video(&path);
+        let mut a = VideoDecoder::open(&path, 0.0).unwrap();
+        let mut b = VideoDecoder::open(&path, 0.0).unwrap();
+        assert_ne!(a.frame_at(0.0).unwrap().id, b.frame_at(0.0).unwrap().id);
     }
 
     #[test]
@@ -357,7 +398,41 @@ mod tests {
         variable_rate_video(&path);
         let mut decoder = VideoDecoder::open(&path, 2_500.0).unwrap();
         decoder.frame_at(2_500.0).unwrap();
-        let pts = decoder.current.as_ref().unwrap().pts_ms;
+        let pts = decoder.current_ms().unwrap();
         assert!((pts - 2_500.0).abs() <= 1000.0 / 60.0, "{pts}");
+    }
+
+    #[test]
+    fn audio_opened_at_a_time_matches_skipping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audio.m4a");
+        let base = cm::Time::new(1_000, 1);
+        let mut writer = MediaWriter::aac(&path, 2).unwrap();
+        for i in 0..(2 * 48_000 / 1024) {
+            let first = i * 1024;
+            let pts = base.add(cm::Time::new(first as i64, 48_000));
+            let buf = synthetic::audio_chunk(48_000.0, first, 1024, pts).unwrap();
+            while !writer.is_ready() {
+                sleep(Duration::from_millis(1));
+            }
+            writer.append(&buf).unwrap();
+        }
+        assert!(writer.finish().unwrap());
+
+        let mut skipped = AudioDecoder::open(&path).unwrap().unwrap();
+        skipped.skip(1_234 * 96).unwrap();
+        let mut expected = vec![0.0; 9_600];
+        skipped.read(&mut expected).unwrap();
+        let mut seeked = AudioDecoder::open_at(&path, 1_234.0).unwrap().unwrap();
+        let mut actual = vec![0.0; 9_600];
+        seeked.read(&mut actual).unwrap();
+
+        assert!(expected.iter().any(|s| s.abs() > 0.05));
+        let worst = expected
+            .iter()
+            .zip(&actual)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 0.02, "largest difference {worst}");
     }
 }

@@ -1,3 +1,4 @@
+pub mod editor;
 pub mod recording;
 #[cfg(feature = "synthetic")]
 pub mod synthetic_capture;
@@ -6,12 +7,13 @@ pub mod synthetic_input;
 
 use std::{path::Path, sync::Mutex};
 
+use editor::commands::{self as editor_commands, Editors, ExportFinished, ExportProgress};
 use recast_capture::{DisplayInfo, ScreenCapture, WindowInfo};
 use recast_input::{Permission, PermissionState, Permissions};
 use recast_project::UnfinishedBundle;
 use recording::{FinishedRecording, RecordingRequest, RecordingStatus, Session};
-use tauri::State;
-use tauri_specta::{Builder, collect_commands};
+use tauri::{AppHandle, Manager, State};
+use tauri_specta::{Builder, collect_commands, collect_events};
 
 #[derive(Default)]
 pub struct AppState {
@@ -77,14 +79,21 @@ async fn recording_status(state: State<'_, AppState>) -> Result<Option<Recording
 
 #[tauri::command]
 #[specta::specta]
-async fn stop_recording(state: State<'_, AppState>) -> Result<FinishedRecording, String> {
+async fn stop_recording(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<FinishedRecording, String> {
     let session = state
         .session
         .lock()
         .map_err(|e| e.to_string())?
         .take()
         .ok_or("no recording is running")?;
-    session.stop()
+    let finished = session.stop()?;
+    if let Err(e) = editor_commands::open_editor_window(&app, Path::new(&finished.bundle_path)) {
+        log::warn!("cannot open the editor: {e}");
+    }
+    Ok(finished)
 }
 
 #[tauri::command]
@@ -133,19 +142,34 @@ async fn reveal_in_finder(path: String) -> Result<(), String> {
 }
 
 pub fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![
-        list_displays,
-        list_windows,
-        check_permissions,
-        request_permission,
-        start_recording,
-        recording_status,
-        stop_recording,
-        list_unfinished,
-        recover_bundle,
-        discard_unfinished,
-        reveal_in_finder,
-    ])
+    Builder::<tauri::Wry>::new()
+        .events(collect_events![ExportProgress, ExportFinished])
+        .commands(collect_commands![
+            list_displays,
+            list_windows,
+            check_permissions,
+            request_permission,
+            start_recording,
+            recording_status,
+            stop_recording,
+            list_unfinished,
+            recover_bundle,
+            discard_unfinished,
+            reveal_in_finder,
+            editor_commands::list_projects,
+            editor_commands::open_editor,
+            editor_commands::editor_open,
+            editor_commands::editor_set_settings,
+            editor_commands::editor_play,
+            editor_commands::editor_pause,
+            editor_commands::editor_seek,
+            editor_commands::editor_set_loop,
+            editor_commands::editor_resize,
+            editor_commands::editor_status,
+            editor_commands::editor_stats,
+            editor_commands::export_start,
+            editor_commands::export_cancel,
+        ])
 }
 
 pub const BINDINGS_PATH: &str = "src/bindings.ts";
@@ -163,14 +187,32 @@ pub fn export_bindings(path: &Path) -> Result<(), String> {
 pub fn run() {
     let builder = specta_builder();
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(Editors::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
+            for arg in std::env::args().skip(1) {
+                let path = std::path::PathBuf::from(arg);
+                if path
+                    .extension()
+                    .is_some_and(|e| e == recast_project::BUNDLE_EXTENSION)
+                    && let Err(e) = editor_commands::open_editor_window(app.handle(), &path)
+                {
+                    log::warn!("cannot open {}: {e}", path.display());
+                }
+            }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Recast");
+        .build(tauri::generate_context!())
+        .expect("error while building Recast")
+        .run(|app, event| {
+            // Quitting does not destroy windows first, so sessions are saved here.
+            if let tauri::RunEvent::Exit = event {
+                app.state::<Editors>().shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

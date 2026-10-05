@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use recast_project::SoundSettings;
 use recast_zoom::Click;
 
@@ -11,9 +13,9 @@ fn ms_to_frames(ms: f64) -> i64 {
     (ms * SAMPLE_RATE as f64 / 1000.0).round() as i64
 }
 
-/// Where a recorded audio track sits relative to the export's first frame.
+/// A recorded audio track to mix.
 pub struct TrackInput {
-    pub decoder: AudioDecoder,
+    pub path: PathBuf,
     /// Start of the track on the recording's timeline.
     pub offset_ms: f64,
     pub gain: f32,
@@ -40,8 +42,9 @@ pub struct Mixer {
 }
 
 impl Mixer {
-    /// `start_ms` is where the export starts on the recording's timeline and
-    /// `total_frames` its length in audio frames.
+    /// `start_ms` is where the mix starts on the recording's timeline and
+    /// `total_frames` its length in audio frames. Tracks that cannot be read are
+    /// left out with a warning.
     pub fn new(
         inputs: Vec<TrackInput>,
         clicks: &[Click],
@@ -50,17 +53,22 @@ impl Mixer {
         total_frames: u64,
     ) -> Result<Self> {
         let mut tracks = Vec::new();
-        for mut input in inputs {
+        for input in inputs {
             if input.gain <= 0.0 {
                 continue;
             }
-            let lead = ms_to_frames(start_ms - input.offset_ms);
-            if lead > 0 {
-                input.decoder.skip(lead as usize * 2)?;
-            }
+            let lead_ms = start_ms - input.offset_ms;
+            let decoder = match AudioDecoder::open_at(&input.path, lead_ms.max(0.0)) {
+                Ok(Some(decoder)) => decoder,
+                Ok(None) => continue,
+                Err(e) => {
+                    log::warn!("skipping {}: {e}", input.path.display());
+                    continue;
+                }
+            };
             tracks.push(Track {
-                decoder: input.decoder,
-                silence: (-lead).max(0) as u64,
+                decoder,
+                silence: (-ms_to_frames(lead_ms)).max(0) as u64,
                 gain: input.gain,
             });
         }

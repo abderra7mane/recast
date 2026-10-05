@@ -2,11 +2,11 @@
 //! the compositor, mixes audio and click sounds, and encodes with AVAssetWriter.
 
 #[cfg(target_os = "macos")]
-mod decode;
+pub mod decode;
 #[cfg(target_os = "macos")]
 mod encode;
 #[cfg(target_os = "macos")]
-mod mix;
+pub mod mix;
 pub mod sounds;
 
 use std::{
@@ -78,7 +78,7 @@ pub fn export(
     on_progress: &mut dyn FnMut(Progress),
     cancel: &AtomicBool,
 ) -> Result<ExportSummary> {
-    use decode::{AudioDecoder, VideoDecoder};
+    use decode::VideoDecoder;
     use encode::{Encoder, EncoderOptions, bitrate};
     use mix::{Mixer, TrackInput};
 
@@ -105,18 +105,11 @@ pub fn export(
         (&recording.mic, settings.audio.mic_volume),
     ] {
         let Some(track) = track else { continue };
-        if gain <= 0.0 {
-            continue;
-        }
-        match AudioDecoder::open(&bundle.file(&track.file)) {
-            Ok(Some(decoder)) => tracks.push(TrackInput {
-                decoder,
-                offset_ms: track.offset_ms,
-                gain: gain as f32,
-            }),
-            Ok(None) => {}
-            Err(e) => log::warn!("skipping {}: {e}", track.file),
-        }
+        tracks.push(TrackInput {
+            path: bundle.file(&track.file),
+            offset_ms: track.offset_ms,
+            gain: gain as f32,
+        });
     }
     let audio_frames = (total_frames as f64 * SAMPLE_RATE as f64 / fps as f64).round() as u64;
     let mut mixer = Mixer::new(
