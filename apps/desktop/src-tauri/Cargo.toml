@@ -1,0 +1,39 @@
+[package]
+name = "recast-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+default-run = "recast-desktop"
+
+[lib]
+name = "recast_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+recast-capture.workspace = true
+recast-input.workspace = true
+recast-project.workspace = true
+tauri = { version = "2.12.1", features = [] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+specta.workspace = true
+specta-typescript = "=0.0.12"
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+cidre = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, features = ["std", "NSFileManager", "NSURL", "NSString", "NSError"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+synthetic = ["recast-capture/synthetic", "dep:cidre"]
+
+[lints]
+workspace = true

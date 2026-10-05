@@ -1,0 +1,26 @@
+[package]
+name = "recast-input"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+recast-project.workspace = true
+serde.workspace = true
+specta.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["std", "NSData", "NSDictionary", "NSGeometry", "NSArray", "NSEnumerator", "NSAutoreleasePool"] }
+objc2-app-kit = { workspace = true, features = ["std", "NSCursor", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSGraphics", "objc2-core-foundation"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

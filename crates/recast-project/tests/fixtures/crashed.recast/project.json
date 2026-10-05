@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "name": "Crashed",
+  "createdAtUnixMs": 1791151858486.625,
+  "recording": {
+    "source": {
+      "kind": "display",
+      "displayId": 0
+    },
+    "bounds": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 640.0,
+      "height": 360.0
+    },
+    "width": 640,
+    "height": 360,
+    "scaleFactor": 1.0,
+    "fps": 60,
+    "durationMs": 0.0,
+    "video": {
+      "file": "screen.mp4",
+      "codec": "hevc",
+      "durationMs": 0.0
+    },
+    "systemAudio": {
+      "file": "system-audio.m4a",
+      "offsetMs": 0.0,
+      "durationMs": 0.0
+    },
+    "mic": null,
+    "eventsFile": "events.msgpack",
+    "cursorsDir": "cursors",
+    "recovered": false
+  }
+}
