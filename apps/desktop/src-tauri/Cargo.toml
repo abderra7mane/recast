@@ -34,7 +34,51 @@ serde_json.workspace = true
 log.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 cidre = { workspace = true, optional = true }
-objc2-foundation = { workspace = true, features = ["std", "NSFileManager", "NSURL", "NSString", "NSError"] }
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
+  "std",
+  "NSArray",
+  "NSData",
+  "NSDictionary",
+  "NSError",
+  "NSFileManager",
+  "NSGeometry",
+  "NSObject",
+  "NSString",
+  "NSURL",
+  "NSValue",
+] }
+objc2-app-kit = { workspace = true, features = [
+  "std",
+  "objc2-core-foundation",
+  "NSAttributedString",
+  "NSBezierPath",
+  "NSBitmapImageRep",
+  "NSColor",
+  "NSCursor",
+  "NSDragging",
+  "NSDraggingItem",
+  "NSDraggingSession",
+  "NSEvent",
+  "NSFont",
+  "NSFontDescriptor",
+  "NSGraphics",
+  "NSGraphicsContext",
+  "NSImage",
+  "NSImageRep",
+  "NSPanel",
+  "NSPasteboard",
+  "NSPasteboardItem",
+  "NSResponder",
+  "NSScreen",
+  "NSStringDrawing",
+  "NSTrackingArea",
+  "NSView",
+  "NSWindow",
+] }
+dispatch2 = "0.3.1"
+tokio = { version = "1.53.2", features = ["sync"] }
+base64 = "0.22.1"
 
 [dev-dependencies]
 tempfile.workspace = true

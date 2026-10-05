@@ -45,6 +45,7 @@ struct ScreenTexture {
     height: u32,
     format: PixelFormat,
     frame_id: Option<u64>,
+    has_alpha: bool,
 }
 
 struct SceneTextures {
@@ -488,10 +489,12 @@ impl Compositor {
                 height: frame.height,
                 format: frame.format,
                 frame_id: None,
+                has_alpha: frame.has_alpha,
             });
             self.composite_bind = None;
         }
         let screen = self.screen.as_mut().expect("screen texture");
+        screen.has_alpha = frame.has_alpha;
         if frame.id.is_some() && screen.frame_id == frame.id {
             return Ok(());
         }
@@ -658,7 +661,7 @@ impl Compositor {
                 screen.width as f32,
                 screen.height as f32,
                 (RIPPLE_RING_PTS * zoomed_px_per_pt).max(1.5) as f32,
-                0.0,
+                if screen.has_alpha { 1.0 } else { 0.0 },
             ],
             ripples,
         };

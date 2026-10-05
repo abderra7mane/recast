@@ -111,6 +111,7 @@ impl LockedFrame {
             format: PixelFormat::Bgra8,
             data,
             id: Some(self.id),
+            has_alpha: false,
         }
     }
 }

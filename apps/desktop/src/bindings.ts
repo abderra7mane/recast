@@ -26,6 +26,35 @@ export const commands = {
 	recoverBundle: (path: string) => typedError<FinishedRecording, string>(__TAURI_INVOKE("recover_bundle", { path })),
 	discardUnfinished: (path: string) => typedError<null, string>(__TAURI_INVOKE("discard_unfinished", { path })),
 	revealInFinder: (path: string) => typedError<null, string>(__TAURI_INVOKE("reveal_in_finder", { path })),
+	getSettings: () => typedError<AppSettings, string>(__TAURI_INVOKE("get_settings")),
+	setScreenshotSettings: (screenshots: ScreenshotSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_screenshot_settings", { screenshots })),
+	pickTarget: (mode: PickMode) => typedError<{
+	target: CaptureTarget,
+	/**  The display the target was picked on. */
+	displayId: number,
+	/**  The picked area in global points. */
+	bounds: Rect,
+	label: string,
+} | null, string>(__TAURI_INVOKE("pick_target", { mode })),
+	/**  Picks a target, captures it and shows the thumbnail; `None` when the user cancels. */
+	takeScreenshot: (mode: PickMode) => typedError<{
+	/**  The saved file, when saving is on. */
+	path: string | null,
+	width: number,
+	height: number,
+	copied: boolean,
+	/**  Problems that didn't stop the capture, such as a failed clipboard copy. */
+	warnings: string[],
+} | null, string>(__TAURI_INVOKE("take_screenshot", { mode })),
+	beautifyOpen: () => typedError<BeautifyInit, string>(__TAURI_INVOKE("beautify_open")),
+	/**  The beautified screenshot scaled to fit `max_width × max_height` pixels, as a PNG data URL. */
+	beautifyPreview: (background: BackgroundSettings, maxWidth: number, maxHeight: number) => typedError<string, string>(__TAURI_INVOKE("beautify_preview", { background, maxWidth, maxHeight })),
+	beautifyCopy: (background: BackgroundSettings) => typedError<null, string>(__TAURI_INVOKE("beautify_copy", { background })),
+	/**
+	 *  Saves to `path`, or under a new name in `~/Pictures/Recast` when there is none.
+	 *  Returns the saved file.
+	 */
+	beautifySave: (background: BackgroundSettings, path: string | null) => typedError<string, string>(__TAURI_INVOKE("beautify_save", { background, path })),
 	listProjects: () => __TAURI_INVOKE<ProjectSummary[]>("list_projects"),
 	openEditor: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_editor", { path })),
 	/**  Starts the session of the calling editor window (or returns the running one). */
@@ -59,6 +88,12 @@ export const events = {
 };
 
 /* Types */
+export type AppSettings = {
+	screenshots?: ScreenshotSettings,
+	/**  The last background used to beautify a screenshot. */
+	beautify?: BackgroundSettings,
+};
+
 /**  Gains from 0 (muted) to 2. */
 export type AudioMix = {
 	micVolume?: number | null,
@@ -84,6 +119,16 @@ export type BackgroundSettings = {
 	padding?: number | null,
 	cornerRadius?: number | null,
 	shadow?: Shadow,
+};
+
+export type BeautifyInit = {
+	name: string,
+	width: number,
+	height: number,
+	scaleFactor: number | null,
+	/**  The background used last time. */
+	background: BackgroundSettings,
+	savedPath: string | null,
 };
 
 export type CaptureSource = { kind: "display"; displayId: number } | { kind: "window"; windowId: number; title: string | null; appName: string | null } | { kind: "region"; displayId: number; rect: Rect };
@@ -206,6 +251,24 @@ export type Permissions = {
 	microphone: PermissionState,
 };
 
+/**  What the picker highlights first; Space switches to and from [`PickMode::Display`]. */
+export type PickMode = 
+/**  Nothing is highlighted until a drag selects a region. */
+"area" | 
+/**  The window under the pointer is highlighted; a click picks it. */
+"window" | 
+/**  The display under the pointer is highlighted; a click picks it. */
+"display";
+
+export type Picked = {
+	target: CaptureTarget,
+	/**  The display the target was picked on. */
+	displayId: number,
+	/**  The picked area in global points. */
+	bounds: Rect,
+	label: string,
+};
+
 export type PreviewStats = {
 	frames: number,
 	renderMs: number | null,
@@ -276,6 +339,22 @@ export type Rect = {
 
 /**  The output's shorter side. */
 export type Resolution = "1080p" | "1440p" | "4k";
+
+export type ScreenshotSettings = {
+	copyToClipboard?: boolean,
+	/**  Saves every capture to `~/Pictures/Recast`. */
+	saveToDisk?: boolean,
+};
+
+export type ScreenshotTaken = {
+	/**  The saved file, when saving is on. */
+	path: string | null,
+	width: number,
+	height: number,
+	copied: boolean,
+	/**  Problems that didn't stop the capture, such as a failed clipboard copy. */
+	warnings: string[],
+};
 
 /**  Sizes are fractions of the screen's shorter side. */
 export type Shadow = {

@@ -14,8 +14,8 @@ use super::{
     writer::{MediaWriter, platform},
 };
 use crate::{
-    ActiveCapture, CaptureEvent, CaptureInfo, CaptureOptions, CaptureTarget, Error, EventHandler,
-    OutputFiles, Rect, Result, Track, check_region, even,
+    ActiveCapture, CaptureEvent, CaptureInfo, CaptureOptions, Error, EventHandler, OutputFiles,
+    Result, Track, even,
 };
 
 /// Writes one audio track, creating the file once the first buffer reveals the format.
@@ -206,84 +206,24 @@ struct Plan {
 }
 
 fn plan(content: &sc::ShareableContent, options: &CaptureOptions) -> Result<Plan> {
-    let fps = options.fps.clamp(1, 120);
-    let info = |width: f64, height: f64, scale: f64, bounds: Rect| CaptureInfo {
-        width: even(width * scale),
-        height: even(height * scale),
-        scale_factor: scale,
-        bounds,
-        fps,
-        codec: "hevc".into(),
-        window_title: None,
-        app_name: None,
-    };
-    match &options.target {
-        CaptureTarget::Display { display_id } => {
-            let display = content::find_display(content, *display_id)?;
-            let filter = sc::ContentFilter::with_display_excluding_apps_excepting_windows(
-                &display,
-                &content::own_apps(content),
-                &ns::Array::new(),
-            );
-            let scale = sc::ShareableContent::info_for_filter(&filter).point_pixel_scale() as f64;
-            let bounds = content::rect(display.frame());
-            Ok(Plan {
-                info: info(bounds.width, bounds.height, scale, bounds),
-                filter,
-                src_rect: None,
-            })
-        }
-        CaptureTarget::Region { display_id, rect } => {
-            let display = content::find_display(content, *display_id)?;
-            let frame = content::rect(display.frame());
-            check_region(&frame, rect)?;
-            let filter = sc::ContentFilter::with_display_excluding_apps_excepting_windows(
-                &display,
-                &content::own_apps(content),
-                &ns::Array::new(),
-            );
-            let scale = sc::ShareableContent::info_for_filter(&filter).point_pixel_scale() as f64;
-            let bounds = Rect {
-                x: frame.x + rect.x,
-                y: frame.y + rect.y,
-                ..*rect
-            };
-            Ok(Plan {
-                info: info(rect.width, rect.height, scale, bounds),
-                filter,
-                src_rect: Some(cg::Rect {
-                    origin: cg::Point {
-                        x: rect.x,
-                        y: rect.y,
-                    },
-                    size: cg::Size {
-                        width: rect.width,
-                        height: rect.height,
-                    },
-                }),
-            })
-        }
-        CaptureTarget::Window { window_id } => {
-            let window = content::find_window(content, *window_id)?;
-            let filter = sc::ContentFilter::with_desktop_independent_window(&window);
-            let filter_info = sc::ShareableContent::info_for_filter(&filter);
-            let scale = filter_info.point_pixel_scale() as f64;
-            let size = filter_info.content_rect().size;
-            let mut info = info(
-                size.width,
-                size.height,
-                scale,
-                content::rect(window.frame()),
-            );
-            info.window_title = window.title().map(|t| t.to_string());
-            info.app_name = window.owning_app().map(|a| a.app_name().to_string());
-            Ok(Plan {
-                info,
-                filter,
-                src_rect: None,
-            })
-        }
-    }
+    let source = content::source(content, &options.target)?;
+    let window = source.window.as_ref();
+    Ok(Plan {
+        info: CaptureInfo {
+            width: even(source.width * source.scale),
+            height: even(source.height * source.scale),
+            scale_factor: source.scale,
+            bounds: source.bounds,
+            fps: options.fps.clamp(1, 120),
+            codec: "hevc".into(),
+            window_title: window.and_then(|w| w.title()).map(|t| t.to_string()),
+            app_name: window
+                .and_then(|w| w.owning_app())
+                .map(|a| a.app_name().to_string()),
+        },
+        filter: source.filter,
+        src_rect: source.src_rect,
+    })
 }
 
 impl Recorder {

@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+
 use cidre::{arc, cg, ns, sc};
 
 use super::{block_on, writer::platform};
-use crate::{DisplayInfo, Error, Rect, Result, WindowInfo};
+use crate::{
+    CaptureTarget, DisplayInfo, Error, Rect, Result, WindowInfo, check_region, picker::PickerWindow,
+};
 
 pub(super) fn shareable_content() -> Result<arc::R<sc::ShareableContent>> {
     block_on(sc::ShareableContent::current()).map_err(|e| {
@@ -109,4 +113,122 @@ pub(super) fn windows() -> Result<Vec<WindowInfo>> {
         });
     }
     Ok(out)
+}
+
+/// On-screen windows that ScreenCaptureKit can capture, ordered front to back.
+pub(super) fn window_stack() -> Result<Vec<PickerWindow>> {
+    let content = shareable_content()?;
+    let windows = content.windows();
+    let by_id: HashMap<u32, &sc::Window> = windows.iter().map(|w| (w.id(), w)).collect();
+    let order = cg::WindowList::new(
+        cg::WindowListOpt::ON_SCREEN_ONLY | cg::WindowListOpt::EXCLUDE_DESKTOP_ELEMENTS,
+        cg::WINDOW_ID_NULL,
+    )
+    .ok_or_else(|| Error::Platform("cannot list the windows on screen".into()))?;
+    let mut out = Vec::new();
+    for index in 0..order.len() {
+        let Some(window) = by_id.get(&order.get(index)) else {
+            continue;
+        };
+        let app = window.owning_app();
+        out.push(PickerWindow {
+            id: window.id(),
+            pid: app.as_ref().map_or(-1, |a| a.process_id()),
+            layer: window.window_layer() as i32,
+            app_name: app.map(|a| a.app_name().to_string()).unwrap_or_default(),
+            title: window.title().map(|t| t.to_string()).unwrap_or_default(),
+            bounds: rect(window.frame()),
+        });
+    }
+    Ok(out)
+}
+
+/// What a capture target resolves to in ScreenCaptureKit.
+pub(super) struct Source {
+    pub filter: arc::R<sc::ContentFilter>,
+    pub scale: f64,
+    /// Captured size in points.
+    pub width: f64,
+    pub height: f64,
+    /// Captured area in global display points.
+    pub bounds: Rect,
+    /// Part of the display to capture, in display points.
+    pub src_rect: Option<cg::Rect>,
+    pub window: Option<arc::R<sc::Window>>,
+}
+
+/// Display and region filters leave out this app's windows.
+pub(super) fn source(content: &sc::ShareableContent, target: &CaptureTarget) -> Result<Source> {
+    let display_filter = |display: &sc::Display| {
+        sc::ContentFilter::with_display_excluding_apps_excepting_windows(
+            display,
+            &own_apps(content),
+            &ns::Array::new(),
+        )
+    };
+    let scale = |filter: &sc::ContentFilter| {
+        sc::ShareableContent::info_for_filter(filter).point_pixel_scale() as f64
+    };
+    match target {
+        CaptureTarget::Display { display_id } => {
+            let display = find_display(content, *display_id)?;
+            let filter = display_filter(&display);
+            let bounds = rect(display.frame());
+            Ok(Source {
+                scale: scale(&filter),
+                filter,
+                width: bounds.width,
+                height: bounds.height,
+                bounds,
+                src_rect: None,
+                window: None,
+            })
+        }
+        CaptureTarget::Region {
+            display_id,
+            rect: region,
+        } => {
+            let display = find_display(content, *display_id)?;
+            let frame = rect(display.frame());
+            check_region(&frame, region)?;
+            let filter = display_filter(&display);
+            Ok(Source {
+                scale: scale(&filter),
+                filter,
+                width: region.width,
+                height: region.height,
+                bounds: Rect {
+                    x: frame.x + region.x,
+                    y: frame.y + region.y,
+                    ..*region
+                },
+                src_rect: Some(cg::Rect {
+                    origin: cg::Point {
+                        x: region.x,
+                        y: region.y,
+                    },
+                    size: cg::Size {
+                        width: region.width,
+                        height: region.height,
+                    },
+                }),
+                window: None,
+            })
+        }
+        CaptureTarget::Window { window_id } => {
+            let window = find_window(content, *window_id)?;
+            let filter = sc::ContentFilter::with_desktop_independent_window(&window);
+            let info = sc::ShareableContent::info_for_filter(&filter);
+            let size = info.content_rect().size;
+            Ok(Source {
+                scale: info.point_pixel_scale() as f64,
+                filter,
+                width: size.width,
+                height: size.height,
+                bounds: rect(window.frame()),
+                src_rect: None,
+                window: Some(window),
+            })
+        }
+    }
 }

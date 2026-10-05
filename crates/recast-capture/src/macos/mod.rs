@@ -1,6 +1,7 @@
 mod content;
 mod mic;
 mod recorder;
+mod screenshot;
 #[cfg(any(test, feature = "synthetic"))]
 pub mod synthetic;
 pub mod writer;
@@ -14,9 +15,11 @@ use std::{
 use cidre::{cm, mach};
 
 use crate::{
-    ActiveCapture, CaptureOptions, DisplayInfo, EventHandler, OutputFiles, Result, ScreenCapture,
-    WindowInfo,
+    ActiveCapture, CaptureOptions, CaptureTarget, DisplayInfo, EventHandler, OutputFiles, Result,
+    ScreenCapture, Screenshot, WindowInfo, picker::PickerWindow,
 };
+
+pub use screenshot::image_rgba;
 
 pub struct MacCapture;
 
@@ -27,6 +30,14 @@ impl ScreenCapture for MacCapture {
 
     fn windows(&self) -> Result<Vec<WindowInfo>> {
         content::windows()
+    }
+
+    fn window_stack(&self) -> Result<Vec<PickerWindow>> {
+        content::window_stack()
+    }
+
+    fn screenshot(&self, target: &CaptureTarget) -> Result<Screenshot> {
+        screenshot::screenshot(target)
     }
 
     fn start(

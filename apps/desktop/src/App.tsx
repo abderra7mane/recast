@@ -1,17 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
-import { Circle, FolderOpen, Pencil, RefreshCw, Square } from "lucide-react";
+import {
+  AppWindow,
+  Circle,
+  Crop,
+  FolderOpen,
+  Monitor,
+  Pencil,
+  Square,
+} from "lucide-react";
 
 import {
   commands,
-  type DisplayInfo,
   type FinishedRecording,
   type Permission,
   type Permissions,
   type PermissionState,
+  type PickMode,
   type ProjectSummary,
   type RecordingStatus,
   type UnfinishedBundle,
-  type WindowInfo,
 } from "@/bindings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,24 +29,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-  buildTarget,
-  formatElapsed,
-  windowLabel,
-  type RegionInput,
-  type SourceForm,
-  type SourceKind,
-} from "@/recording";
+import { complete, type Complete } from "@/editor/settings";
+import type { ScreenshotSettings } from "@/bindings";
+import { formatElapsed, pickedLabel, screenshotMessage } from "@/recording";
 
 const PERMISSIONS: { key: keyof Permissions; id: Permission; label: string }[] =
   [
@@ -116,68 +110,130 @@ function PermissionsCard() {
   );
 }
 
-type SourcesState = {
-  displays: DisplayInfo[];
-  windows: WindowInfo[];
-  error: string | null;
-};
+function ToggleField({
+  id,
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Switch
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+      />
+      <Label htmlFor={id}>{label}</Label>
+    </div>
+  );
+}
 
-function useSources() {
-  const [sources, setSources] = useState<SourcesState>({
-    displays: [],
-    windows: [],
-    error: null,
-  });
+const CAPTURES: { mode: PickMode; label: string; icon: typeof Crop }[] = [
+  { mode: "area", label: "Capture area", icon: Crop },
+  { mode: "window", label: "Capture window", icon: AppWindow },
+  { mode: "display", label: "Capture display", icon: Monitor },
+];
 
-  const refresh = useCallback(async () => {
-    const [displays, windows] = await Promise.all([
-      commands.listDisplays(),
-      commands.listWindows(),
-    ]);
-    setSources({
-      displays: displays.status === "ok" ? displays.data : [],
-      windows: windows.status === "ok" ? windows.data : [],
-      error:
-        displays.status === "error"
-          ? displays.error
-          : windows.status === "error"
-            ? windows.error
-            : null,
+function ScreenshotsCard() {
+  const [options, setOptions] = useState<Complete<ScreenshotSettings> | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{
+    text: string;
+    error?: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    void commands.getSettings().then((result) => {
+      if (result.status === "ok") setOptions(complete(result.data).screenshots);
     });
   }, []);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const change = async (patch: Partial<ScreenshotSettings>) => {
+    if (!options) return;
+    const next = { ...options, ...patch };
+    setOptions(next);
+    const result = await commands.setScreenshotSettings(next);
+    if (result.status === "ok") setOptions(complete(result.data).screenshots);
+    else setMessage({ text: result.error, error: true });
+  };
 
-  return { ...sources, refresh };
-}
+  const capture = async (mode: PickMode) => {
+    setBusy(true);
+    setMessage(null);
+    const result = await commands.takeScreenshot(mode);
+    setBusy(false);
+    if (result.status === "error") {
+      setMessage({ text: result.error, error: true });
+    } else if (result.data) {
+      const warnings = result.data.warnings.join(" ");
+      setMessage({
+        text: [screenshotMessage(result.data), warnings].join(" ").trim(),
+        error: warnings.length > 0,
+      });
+    }
+  };
 
-function RegionFields({
-  region,
-  onChange,
-  disabled,
-}: {
-  region: RegionInput;
-  onChange: (region: RegionInput) => void;
-  disabled: boolean;
-}) {
-  const fields: (keyof RegionInput)[] = ["x", "y", "width", "height"];
   return (
-    <div className="grid grid-cols-4 gap-2">
-      {fields.map((field) => (
-        <div key={field} className="space-y-1">
-          <Label htmlFor={`region-${field}`}>{field}</Label>
-          <Input
-            id={`region-${field}`}
-            inputMode="decimal"
-            value={region[field]}
-            disabled={disabled}
-            onChange={(e) => onChange({ ...region, [field]: e.target.value })}
-          />
+    <Card>
+      <CardHeader>
+        <CardTitle>Screenshots</CardTitle>
+        <CardDescription>
+          Drag to select an area or click a window. Space switches to the whole
+          display, Esc cancels.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {CAPTURES.map(({ mode, label, icon: Icon }) => (
+            <Button
+              key={mode}
+              variant="outline"
+              disabled={busy}
+              onClick={() => capture(mode)}
+            >
+              <Icon /> {label}
+            </Button>
+          ))}
         </div>
-      ))}
-    </div>
+        {options && (
+          <div className="flex flex-wrap items-center gap-6">
+            <ToggleField
+              id="copy-to-clipboard"
+              label="Copy to clipboard"
+              checked={options.copyToClipboard}
+              onChange={(copyToClipboard) => change({ copyToClipboard })}
+            />
+            <ToggleField
+              id="save-to-disk"
+              label="Save to ~/Pictures/Recast"
+              checked={options.saveToDisk}
+              onChange={(saveToDisk) => change({ saveToDisk })}
+            />
+          </div>
+        )}
+        {message && (
+          <p
+            className={
+              message.error
+                ? "text-destructive text-sm break-all"
+                : "text-muted-foreground text-sm break-all"
+            }
+          >
+            {message.text}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -402,15 +458,9 @@ function RecordingsCard({ projects }: { projects: ProjectSummary[] }) {
 }
 
 export default function App() {
-  const sources = useSources();
-  const [form, setForm] = useState<SourceForm>({
-    kind: "display",
-    displayId: null,
-    windowId: null,
-    region: { x: "0", y: "0", width: "1280", height: "720" },
-  });
   const [systemAudio, setSystemAudio] = useState(true);
   const [mic, setMic] = useState(false);
+  const [target, setTarget] = useState<string | null>(null);
   const [status, setStatus] = useState<RecordingStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -431,7 +481,6 @@ export default function App() {
     });
   }, [refreshUnfinished]);
 
-  const displayId = form.displayId ?? sources.displays[0]?.id ?? null;
   const recording = status !== null;
 
   useEffect(() => {
@@ -445,14 +494,16 @@ export default function App() {
 
   const start = async () => {
     setError(null);
-    const target = buildTarget({ ...form, displayId }, sources.displays);
-    if (!target.ok) {
-      setError(target.error);
+    setBusy(true);
+    const picked = await commands.pickTarget("window");
+    if (picked.status === "error" || !picked.data) {
+      setBusy(false);
+      if (picked.status === "error") setError(picked.error);
       return;
     }
-    setBusy(true);
+    setTarget(pickedLabel(picked.data));
     const result = await commands.startRecording({
-      target: target.target,
+      target: picked.data.target,
       systemAudio,
       mic,
     });
@@ -475,144 +526,61 @@ export default function App() {
     void refreshUnfinished();
   };
 
-  const setKind = (kind: SourceKind) => setForm({ ...form, kind });
-
   return (
     <main className="mx-auto max-w-xl space-y-4 p-4">
       <h1 className="text-xl font-semibold">Recast</h1>
 
       <PermissionsCard />
 
+      <ScreenshotsCard />
+
       <Card>
         <CardHeader>
-          <CardTitle>Source</CardTitle>
-          {sources.error && (
-            <CardDescription className="text-destructive">
-              {sources.error}
-            </CardDescription>
-          )}
+          <CardTitle>Recording</CardTitle>
+          <CardDescription>
+            Record… lets you pick a window, drag an area or press Space for the
+            whole display.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex gap-2">
-            {(["display", "window", "region"] as const).map((kind) => (
-              <Button
-                key={kind}
-                size="sm"
-                variant={form.kind === kind ? "default" : "outline"}
-                disabled={recording}
-                onClick={() => setKind(kind)}
-              >
-                {kind[0].toUpperCase() + kind.slice(1)}
-              </Button>
-            ))}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto"
-              disabled={recording}
-              onClick={() => sources.refresh()}
-              aria-label="Refresh sources"
-            >
-              <RefreshCw />
-            </Button>
-          </div>
-
-          {form.kind !== "window" && (
-            <div className="space-y-1">
-              <Label>Display</Label>
-              <Select
-                value={displayId === null ? undefined : String(displayId)}
-                disabled={recording}
-                onValueChange={(v) =>
-                  setForm({ ...form, displayId: Number(v) })
-                }
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Pick a display" />
-                </SelectTrigger>
-                <SelectContent>
-                  {sources.displays.map((d) => (
-                    <SelectItem key={d.id} value={String(d.id)}>
-                      {d.name} — {d.bounds.width}×{d.bounds.height} pt @
-                      {d.scaleFactor}x
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {form.kind === "window" && (
-            <div className="space-y-1">
-              <Label>Window</Label>
-              <Select
-                value={
-                  form.windowId === null ? undefined : String(form.windowId)
-                }
-                disabled={recording}
-                onValueChange={(v) => setForm({ ...form, windowId: Number(v) })}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Pick a window" />
-                </SelectTrigger>
-                <SelectContent>
-                  {sources.windows.map((w) => (
-                    <SelectItem key={w.id} value={String(w.id)}>
-                      {windowLabel(w)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {form.kind === "region" && (
-            <RegionFields
-              region={form.region}
-              disabled={recording}
-              onChange={(region) => setForm({ ...form, region })}
-            />
-          )}
-
           <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2">
-              <Switch
-                id="system-audio"
-                checked={systemAudio}
-                disabled={recording}
-                onCheckedChange={setSystemAudio}
-              />
-              <Label htmlFor="system-audio">System audio</Label>
-            </div>
-            <div className="flex items-center gap-2">
-              <Switch
-                id="mic"
-                checked={mic}
-                disabled={recording}
-                onCheckedChange={setMic}
-              />
-              <Label htmlFor="mic">Microphone</Label>
-            </div>
+            <ToggleField
+              id="system-audio"
+              label="System audio"
+              checked={systemAudio}
+              disabled={recording}
+              onChange={setSystemAudio}
+            />
+            <ToggleField
+              id="mic"
+              label="Microphone"
+              checked={mic}
+              disabled={recording}
+              onChange={setMic}
+            />
           </div>
+          <div className="flex items-center gap-4">
+            {recording ? (
+              <Button variant="destructive" disabled={busy} onClick={stop}>
+                <Square /> Stop
+              </Button>
+            ) : (
+              <Button disabled={busy} onClick={start}>
+                <Circle /> Record…
+              </Button>
+            )}
+            {status && (
+              <span className="font-mono text-sm">
+                {formatElapsed(status.elapsedMs)} · {status.width}×
+                {status.height}
+              </span>
+            )}
+          </div>
+          {recording && target && (
+            <p className="text-muted-foreground truncate text-sm">{target}</p>
+          )}
         </CardContent>
       </Card>
-
-      <div className="flex items-center gap-4">
-        {recording ? (
-          <Button variant="destructive" disabled={busy} onClick={stop}>
-            <Square /> Stop
-          </Button>
-        ) : (
-          <Button disabled={busy} onClick={start}>
-            <Circle /> Start recording
-          </Button>
-        )}
-        {status && (
-          <span className="font-mono text-sm">
-            {formatElapsed(status.elapsedMs)} · {status.width}×{status.height}
-          </span>
-        )}
-      </div>
 
       {status && !status.inputEvents && (
         <p className="text-sm text-amber-600">

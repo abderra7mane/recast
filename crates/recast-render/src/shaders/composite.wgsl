@@ -12,7 +12,8 @@ struct Params {
     // gradient direction x, y
     gradient: vec4f,
     ripple_color: vec4f,
-    // screen texture width, height (texels); ripple ring thickness (pixels)
+    // screen texture width, height (texels); ripple ring thickness (pixels);
+    // 1 when the screen has premultiplied alpha, 0 when it is opaque
     source: vec4f,
     // x, y, radius (pixels), opacity
     ripples: array<vec4f, 16>,
@@ -55,22 +56,29 @@ fn background(p: vec2f) -> vec3f {
 }
 
 // Box-filters the screen over the area one output pixel covers, so downscaled text stays legible.
-fn sample_screen(uv: vec2f) -> vec3f {
+fn sample_screen(uv: vec2f) -> vec4f {
     let texels_per_pixel = u.view.zw * u.source.xy / u.content_size.xy;
-    let taps = clamp(ceil(max(texels_per_pixel.x, texels_per_pixel.y)), 1.0, 4.0);
+    // The tolerance keeps a 1:1 mapping off by float rounding at a single tap.
+    let taps = clamp(ceil(max(texels_per_pixel.x, texels_per_pixel.y) - 1e-3), 1.0, 4.0);
+    var color: vec4f;
     if taps <= 1.0 {
-        return textureSampleLevel(screen_tex, linear_sampler, uv, 0.0).rgb;
-    }
-    let footprint = texels_per_pixel / u.source.xy;
-    let n = i32(taps);
-    var sum = vec3f(0.0);
-    for (var y = 0; y < n; y++) {
-        for (var x = 0; x < n; x++) {
-            let offset = (vec2f(f32(x), f32(y)) + 0.5) / taps - 0.5;
-            sum += textureSampleLevel(screen_tex, linear_sampler, uv + offset * footprint, 0.0).rgb;
+        color = textureSampleLevel(screen_tex, linear_sampler, uv, 0.0);
+    } else {
+        let footprint = texels_per_pixel / u.source.xy;
+        let n = i32(taps);
+        var sum = vec4f(0.0);
+        for (var y = 0; y < n; y++) {
+            for (var x = 0; x < n; x++) {
+                let offset = (vec2f(f32(x), f32(y)) + 0.5) / taps - 0.5;
+                sum += textureSampleLevel(screen_tex, linear_sampler, uv + offset * footprint, 0.0);
+            }
         }
+        color = sum / (taps * taps);
     }
-    return sum / (taps * taps);
+    if u.source.w < 0.5 {
+        color.a = 1.0;
+    }
+    return color;
 }
 
 @fragment
@@ -93,7 +101,8 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
     let coverage = clamp(0.5 - distance, 0.0, 1.0);
     if coverage > 0.0 {
         let local = (p - content_min) / size;
-        var screen = sample_screen(u.view.xy + local * u.view.zw);
+        let sampled = sample_screen(u.view.xy + local * u.view.zw);
+        var screen = sampled.rgb;
         let half_ring = u.source.z * 0.5;
         for (var i = 0u; i < u32(u.shadow.w); i++) {
             let ripple = u.ripples[i];
@@ -103,7 +112,7 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
             let alpha = clamp(ring + fill, 0.0, 1.0) * ripple.w * u.ripple_color.a;
             screen = mix(screen, u.ripple_color.rgb, alpha);
         }
-        color = mix(color, screen, coverage);
+        color = color * (1.0 - sampled.a * coverage) + screen * coverage;
     }
 
     let dither = (hash(p) - 0.5) / 255.0;

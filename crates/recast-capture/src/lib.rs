@@ -5,6 +5,7 @@ use specta::Type;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod picker;
 
 pub use recast_project::Rect;
 
@@ -106,9 +107,27 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// A still image of a capture target at the display's native resolution, without the cursor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Screenshot {
+    pub width: u32,
+    pub height: u32,
+    pub scale_factor: f64,
+    /// Straight (not premultiplied) sRGB RGBA, tightly packed. Window captures keep
+    /// their transparent corners and have no system shadow.
+    pub rgba: Vec<u8>,
+}
+
 pub trait ScreenCapture: Send + Sync {
     fn displays(&self) -> Result<Vec<DisplayInfo>>;
     fn windows(&self) -> Result<Vec<WindowInfo>>;
+    /// On-screen windows ordered front to back, for hit-testing in the target picker.
+    fn window_stack(&self) -> Result<Vec<picker::PickerWindow>> {
+        Err(Error::Unsupported)
+    }
+    fn screenshot(&self, _target: &CaptureTarget) -> Result<Screenshot> {
+        Err(Error::Unsupported)
+    }
     fn start(
         &self,
         options: &CaptureOptions,

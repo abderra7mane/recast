@@ -4,12 +4,14 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use recast_project::{
-    BackgroundFill, Color, EditSettings, EventKind, EventLog, InputEvent, MouseButton, Rect,
+    BackgroundFill, BackgroundSettings, Color, EditSettings, EventKind, EventLog, InputEvent,
+    MouseButton, Rect, Shadow,
 };
 use recast_render::{
     Compositor, CpuFrame, FrameSource, PixelFormat, Result, Scene, SceneParts,
     bitmap::{self, Rgba},
     cursor::CursorImage,
+    still::StillRenderer,
 };
 
 const SCREEN_W: u32 = 640;
@@ -74,6 +76,7 @@ impl FrameSource for Pattern {
             format: PixelFormat::Bgra8,
             data: &self.pixels,
             id: Some(0),
+            has_alpha: false,
         })
     }
 }
@@ -220,22 +223,26 @@ fn compare(actual: &[u8], expected: &[u8]) -> Diff {
 }
 
 fn check(name: &str, pixels: &[u8]) {
+    check_sized(name, OUT_W, OUT_H, pixels);
+}
+
+fn check_sized(name: &str, width: u32, height: u32, pixels: &[u8]) {
     let path = goldens_dir().join(format!("{name}.png"));
     if std::env::var_os("UPDATE_GOLDENS").is_some() {
         std::fs::create_dir_all(goldens_dir()).unwrap();
-        bitmap::save_png(&path, OUT_W, OUT_H, pixels).unwrap();
+        bitmap::save_png(&path, width, height, pixels).unwrap();
         return;
     }
     let (w, h, expected) = bitmap::load_png(&path)
         .unwrap_or_else(|e| panic!("{e}; run `make update-goldens` to create it"));
-    assert_eq!((w, h), (OUT_W, OUT_H), "{name}: size");
+    assert_eq!((w, h), (width, height), "{name}: size");
     let diff = compare(pixels, &expected);
-    let allowed = (OUT_W * OUT_H) as usize / 500;
+    let allowed = (width * height) as usize / 500;
     if diff.mean > 1.0 || diff.off > allowed {
         let failures = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("golden-failures");
         std::fs::create_dir_all(&failures).unwrap();
         let actual = failures.join(format!("{name}.png"));
-        bitmap::save_png(&actual, OUT_W, OUT_H, pixels).unwrap();
+        bitmap::save_png(&actual, width, height, pixels).unwrap();
         panic!(
             "{name}: mean difference {:.3}, {} pixels off (allowed {allowed}); actual frame at {}",
             diff.mean,
@@ -353,4 +360,169 @@ fn recorded_cursor_is_placed_by_its_hotspot_and_scaled_in_points() {
     }
     let outside = at(hx + 11.0 * px_per_pt, hy);
     assert!(!near(outside, [20, 40, 230]) && !near(outside, [230, 20, 20]));
+}
+
+const SHOT_W: u32 = 240;
+const SHOT_H: u32 = 160;
+const SHOT_CORNER: f64 = 14.0;
+
+/// A window screenshot as ScreenCaptureKit returns it: straight RGBA with transparent
+/// rounded corners and no shadow.
+fn window_shot() -> Vec<u8> {
+    let mut pixels = Vec::with_capacity((SHOT_W * SHOT_H * 4) as usize);
+    for y in 0..SHOT_H {
+        for x in 0..SHOT_W {
+            let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+            let cx = px.clamp(SHOT_CORNER, SHOT_W as f64 - SHOT_CORNER);
+            let cy = py.clamp(SHOT_CORNER, SHOT_H as f64 - SHOT_CORNER);
+            let outside = (px - cx).hypot(py - cy) - SHOT_CORNER;
+            let alpha = (0.5 - outside).clamp(0.0, 1.0);
+            let [r, g, b] = Pattern::color(x * 2 + 60, y * 2 + 40);
+            pixels.extend_from_slice(&[r, g, b, (alpha * 255.0).round() as u8]);
+        }
+    }
+    pixels
+}
+
+fn beautify_background() -> BackgroundSettings {
+    BackgroundSettings {
+        padding: 0.12,
+        corner_radius: 0.06,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn beautified_screenshot_golden() {
+    let mut renderer = StillRenderer::new(SHOT_W, SHOT_H, window_shot());
+    let background = beautify_background();
+    let (w, h) = renderer.native_size(&background);
+    assert_eq!((w, h), (278, 198));
+    let pixels = renderer.render(&background, w, h).unwrap();
+    check_sized("beautify-window", w, h, &pixels);
+
+    let mut solid = background.clone();
+    solid.fill = BackgroundFill::Solid {
+        color: Color::rgb(0xf4, 0xf4, 0xf5),
+    };
+    solid.shadow.opacity = 0.8;
+    solid.shadow.blur = 0.08;
+    let pixels = renderer.render(&solid, w, h).unwrap();
+    check_sized("beautify-solid-shadow", w, h, &pixels);
+}
+
+#[test]
+fn beautify_at_native_size_keeps_every_pixel() {
+    let shot = window_shot();
+    let mut renderer = StillRenderer::new(SHOT_W, SHOT_H, shot.clone());
+    let background = BackgroundSettings {
+        fill: BackgroundFill::Solid {
+            color: Color::rgb(0, 0, 0),
+        },
+        padding: 0.0,
+        corner_radius: 0.0,
+        shadow: Shadow {
+            opacity: 0.0,
+            ..Default::default()
+        },
+    };
+    let (w, h) = renderer.native_size(&background);
+    assert_eq!((w, h), (SHOT_W, SHOT_H));
+    let pixels = renderer.render(&background, w, h).unwrap();
+    for (i, (out, src)) in pixels.chunks_exact(4).zip(shot.chunks_exact(4)).enumerate() {
+        let a = src[3] as f64 / 255.0;
+        for c in 0..3 {
+            let expected = src[c] as f64 * a;
+            assert!(
+                (out[c] as f64 - expected).abs() <= 2.0,
+                "pixel {i} channel {c}: {} vs {expected}",
+                out[c]
+            );
+        }
+        assert_eq!(out[3], 255);
+    }
+}
+
+#[test]
+fn beautify_padding_puts_the_corners_on_the_background() {
+    let mut renderer = StillRenderer::new(SHOT_W, SHOT_H, window_shot());
+    let mut background = beautify_background();
+    background.fill = BackgroundFill::Solid {
+        color: Color::rgb(10, 200, 30),
+    };
+    background.shadow.opacity = 0.0;
+    background.corner_radius = 0.0;
+    let (w, h) = renderer.native_size(&background);
+    let pixels = renderer.render(&background, w, h).unwrap();
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    let near = |a: [u8; 3], b: [u8; 3]| (0..3).all(|c| a[c].abs_diff(b[c]) <= 2);
+    let pad = (0.12 * SHOT_H as f64).round() as u32;
+    assert!(near(at(2, 2), [10, 200, 30]));
+    assert!(
+        near(at(pad + 1, pad + 1), [10, 200, 30]),
+        "transparent corner shows the background: {:?}",
+        at(pad + 1, pad + 1)
+    );
+    let [r, g, b] = Pattern::color(100 * 2 + 60, 80 * 2 + 40);
+    assert!(near(at(pad + 100, pad + 80), [r, g, b]));
+}
+
+/// One-pixel black and white checks, the worst case for any resampling.
+fn checkerboard(width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let v = if (x + y) % 2 == 0 { 0 } else { 255 };
+            pixels.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    pixels
+}
+
+#[test]
+fn beautify_at_native_size_is_pixel_exact_with_padding() {
+    let sizes = [
+        (240, 160, 0.12),
+        (300, 200, 0.1),
+        (2431, 1517, 0.08),
+        (3024, 1964, 0.08),
+        (157, 311, 0.05),
+        (101, 57, 0.3),
+    ];
+    for (width, height, padding) in sizes {
+        let source = checkerboard(width, height);
+        let mut renderer = StillRenderer::new(width, height, source.clone());
+        let background = BackgroundSettings {
+            fill: BackgroundFill::Solid {
+                color: Color::rgb(200, 30, 30),
+            },
+            padding,
+            corner_radius: 0.0,
+            shadow: Shadow {
+                opacity: 0.0,
+                ..Default::default()
+            },
+        };
+        let (out_w, out_h) = renderer.native_size(&background);
+        let pixels = renderer.render(&background, out_w, out_h).unwrap();
+        let pad = (out_w - width) / 2;
+        assert_eq!(out_h - height, 2 * pad, "{width}×{height}: even padding");
+        let mut blurred = 0;
+        for y in 0..height {
+            for x in 0..width {
+                let out = (((y + pad) * out_w + x + pad) * 4) as usize;
+                let src = ((y * width + x) * 4) as usize;
+                if pixels[out].abs_diff(source[src]) > 1 {
+                    blurred += 1;
+                }
+            }
+        }
+        assert_eq!(
+            blurred, 0,
+            "{width}×{height} with padding {padding}: {blurred} pixels resampled"
+        );
+    }
 }

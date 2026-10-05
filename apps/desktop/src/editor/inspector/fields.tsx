@@ -1,13 +1,10 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useContext, useEffect, useRef, type ReactNode } from "react";
 
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { editorStore } from "@/editor/store";
-
-const begin = () => editorStore.getState().beginGesture();
-const end = () => editorStore.getState().endGesture();
+import { GestureContext } from "@/editor/inspector/gesture";
 
 export function Section({
   title,
@@ -63,6 +60,7 @@ export function SliderField({
   disabled?: boolean;
   onChange: (value: number) => void;
 }) {
+  const { begin, end } = useContext(GestureContext);
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -151,6 +149,7 @@ export function ColorField({
 }) {
   const input = useRef<HTMLInputElement>(null);
   const alpha = value.length === 9 ? value.slice(7) : "";
+  const { begin, end } = useContext(GestureContext);
 
   useEffect(() => {
     const element = input.current;
@@ -161,7 +160,7 @@ export function ColorField({
       element.removeEventListener("change", end);
       element.removeEventListener("blur", end);
     };
-  }, []);
+  }, [end]);
 
   return (
     <Field label={label}>

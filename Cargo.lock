@@ -2975,11 +2975,15 @@ dependencies = [
 name = "recast-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "cidre",
  "cpal",
+ "dispatch2",
  "getrandom 0.3.4",
  "log",
+ "objc2",
+ "objc2-app-kit",
  "objc2-foundation",
  "recast-capture",
  "recast-export",
@@ -2996,6 +3000,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-specta",
  "tempfile",
+ "tokio",
  "tungstenite",
 ]
 

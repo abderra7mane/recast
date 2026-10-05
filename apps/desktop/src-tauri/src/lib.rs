@@ -1,5 +1,9 @@
+mod appkit;
 pub mod editor;
+pub mod picker;
 pub mod recording;
+pub mod screenshots;
+pub mod settings;
 #[cfg(feature = "synthetic")]
 pub mod synthetic_capture;
 #[cfg(feature = "synthetic")]
@@ -12,6 +16,8 @@ use recast_capture::{DisplayInfo, ScreenCapture, WindowInfo};
 use recast_input::{Permission, PermissionState, Permissions};
 use recast_project::UnfinishedBundle;
 use recording::{FinishedRecording, RecordingRequest, RecordingStatus, Session};
+use screenshots::beautify::{self, Beautifiers};
+use settings::{AppSettings, ScreenshotSettings, SettingsStore};
 use tauri::{AppHandle, Manager, State};
 use tauri_specta::{Builder, collect_commands, collect_events};
 
@@ -141,6 +147,21 @@ async fn reveal_in_finder(path: String) -> Result<(), String> {
         .map(|_| ())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn get_settings(settings: State<'_, SettingsStore>) -> Result<AppSettings, String> {
+    Ok(settings.get())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn set_screenshot_settings(
+    settings: State<'_, SettingsStore>,
+    screenshots: ScreenshotSettings,
+) -> Result<AppSettings, String> {
+    settings.update(|s| s.screenshots = screenshots)
+}
+
 pub fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .events(collect_events![ExportProgress, ExportFinished])
@@ -156,6 +177,14 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             recover_bundle,
             discard_unfinished,
             reveal_in_finder,
+            get_settings,
+            set_screenshot_settings,
+            picker::pick_target,
+            screenshots::take_screenshot,
+            beautify::beautify_open,
+            beautify::beautify_preview,
+            beautify::beautify_copy,
+            beautify::beautify_save,
             editor_commands::list_projects,
             editor_commands::open_editor,
             editor_commands::editor_open,
@@ -190,9 +219,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(Editors::default())
+        .manage(Beautifiers::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
+            let settings_path = app.path().app_data_dir()?.join(settings::FILE_NAME);
+            app.manage(SettingsStore::load(&settings_path));
             for arg in std::env::args().skip(1) {
                 let path = std::path::PathBuf::from(arg);
                 if path

@@ -7,6 +7,7 @@ pub mod cursor;
 pub mod layout;
 pub mod nv12;
 mod scene;
+pub mod still;
 
 pub use compositor::Compositor;
 pub use scene::{Scene, SceneParts, resolve};
@@ -41,6 +42,8 @@ pub struct CpuFrame<'a> {
     pub data: &'a [u8],
     /// Identifies the frame; a frame with the same id as the previous one is not uploaded again.
     pub id: Option<u64>,
+    /// The pixels carry premultiplied alpha; otherwise the frame is drawn opaque.
+    pub has_alpha: bool,
 }
 
 /// Supplies the screen recording's frame for a time on the recording's timeline.
