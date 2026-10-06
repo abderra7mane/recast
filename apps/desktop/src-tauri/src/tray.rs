@@ -3,7 +3,6 @@
 
 use std::{path::Path, sync::Mutex};
 
-use recast_capture::picker::PickMode;
 use tauri::{
     AppHandle, Manager,
     image::Image,
@@ -87,6 +86,28 @@ fn icon(recording: bool) -> Image<'static> {
     Image::new_owned(icon_pixels(recording), ICON_PX as u32, ICON_PX as u32)
 }
 
+fn menu_id(action: ShortcutAction) -> &'static str {
+    match action {
+        ShortcutAction::RecordArea => "record-area",
+        ShortcutAction::RecordWindow => "record-window",
+        ShortcutAction::RecordDisplay => "record-display",
+        ShortcutAction::CaptureArea => "capture-area",
+        ShortcutAction::CaptureWindow => "capture-window",
+        ShortcutAction::CaptureDisplay => "capture-display",
+    }
+}
+
+fn menu_title(action: ShortcutAction) -> &'static str {
+    match action {
+        ShortcutAction::RecordArea => "Record Area",
+        ShortcutAction::RecordWindow => "Record Window",
+        ShortcutAction::RecordDisplay => "Record Display",
+        ShortcutAction::CaptureArea => "Capture Area",
+        ShortcutAction::CaptureWindow => "Capture Window",
+        ShortcutAction::CaptureDisplay => "Capture Display",
+    }
+}
+
 fn item(
     app: &AppHandle,
     id: &str,
@@ -111,13 +132,11 @@ fn build_menu(app: &AppHandle, phase: &Phase) -> tauri::Result<Menu<tauri::Wry>>
 
     match phase {
         Phase::Recording { .. } => {
-            menu.append(&item(
-                app,
-                "stop",
-                "Stop Recording",
-                true,
-                shortcut(ShortcutAction::Record),
-            )?)?;
+            let stop_shortcut = ShortcutAction::ALL
+                .into_iter()
+                .filter(|a| a.records())
+                .find_map(shortcut);
+            menu.append(&item(app, "stop", "Stop Recording", true, stop_shortcut)?)?;
             menu.append(&item(app, "restart", "Restart Recording", true, None)?)?;
             menu.append(&item(app, "cancel", "Cancel Recording", true, None)?)?;
             menu.append(&separator()?)?;
@@ -138,35 +157,19 @@ fn build_menu(app: &AppHandle, phase: &Phase) -> tauri::Result<Menu<tauri::Wry>>
         Phase::Idle | Phase::Picking => {}
     }
 
-    menu.append(&item(
-        app,
-        "record",
-        "Record…",
-        idle,
-        shortcut(ShortcutAction::Record),
-    )?)?;
-    menu.append(&item(
-        app,
-        "capture-area",
-        "Capture Area",
-        true,
-        shortcut(ShortcutAction::CaptureArea),
-    )?)?;
-    menu.append(&item(
-        app,
-        "capture-window",
-        "Capture Window",
-        true,
-        shortcut(ShortcutAction::CaptureWindow),
-    )?)?;
-    menu.append(&item(
-        app,
-        "capture-display",
-        "Capture Display",
-        true,
-        None,
-    )?)?;
-    menu.append(&separator()?)?;
+    for group in [&ShortcutAction::ALL[..3], &ShortcutAction::ALL[3..]] {
+        for &action in group {
+            let enabled = idle || !action.records();
+            menu.append(&item(
+                app,
+                menu_id(action),
+                menu_title(action),
+                enabled,
+                shortcut(action),
+            )?)?;
+        }
+        menu.append(&separator()?)?;
+    }
 
     let root = app.state::<SettingsStore>().get().recording.dir();
     let recent = recent(editor::list_projects(&root), RECENT_COUNT);
@@ -282,13 +285,9 @@ fn on_tray(tray: &TrayIcon, event: TrayIconEvent) {
 fn on_menu(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     match id {
-        "record" => crate::actions::run(app, ShortcutAction::Record),
         "stop" => crate::actions::stop_recording(app),
         "restart" => crate::actions::restart_recording(app),
         "cancel" => crate::actions::cancel_recording(app),
-        "capture-area" => crate::actions::screenshot(app, PickMode::Area),
-        "capture-window" => crate::actions::screenshot(app, PickMode::Window),
-        "capture-display" => crate::actions::screenshot(app, PickMode::Display),
         "open-folder" => {
             let root = app.state::<SettingsStore>().get().recording.dir();
             crate::actions::open_folder(&root);
@@ -300,7 +299,9 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
         }
         "quit" => app.exit(0),
         _ => {
-            if let Some(index) = id
+            if let Some(action) = ShortcutAction::ALL.into_iter().find(|a| menu_id(*a) == id) {
+                crate::actions::run(app, action);
+            } else if let Some(index) = id
                 .strip_prefix(RECENT_PREFIX)
                 .and_then(|i| i.parse::<usize>().ok())
             {
@@ -382,6 +383,34 @@ mod tests {
             .collect();
         assert_eq!(names, ["Newer", "Older"]);
         assert!(recent[0].path.ends_with("Newer.recast"));
+    }
+
+    #[test]
+    fn every_action_has_a_menu_item() {
+        let ids: Vec<_> = ShortcutAction::ALL.map(menu_id).into();
+        assert_eq!(
+            ids,
+            [
+                "record-area",
+                "record-window",
+                "record-display",
+                "capture-area",
+                "capture-window",
+                "capture-display"
+            ]
+        );
+        let titles: Vec<_> = ShortcutAction::ALL.map(menu_title).into();
+        assert_eq!(
+            titles,
+            [
+                "Record Area",
+                "Record Window",
+                "Record Display",
+                "Capture Area",
+                "Capture Window",
+                "Capture Display"
+            ]
+        );
     }
 
     #[test]

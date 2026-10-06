@@ -3177,6 +3177,7 @@ version = "0.1.0"
 dependencies = [
  "cidre",
  "log",
+ "objc2",
  "recast-project",
  "serde",
  "serde_json",

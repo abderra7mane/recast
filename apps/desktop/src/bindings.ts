@@ -14,8 +14,21 @@ export const commands = {
 	relaunch: () => typedError<null, string>(__TAURI_INVOKE("relaunch")),
 	/**  Remembers that onboarding is done and closes its window. */
 	completeOnboarding: () => typedError<AppSettings, string>(__TAURI_INVOKE("complete_onboarding")),
-	/**  Picks a target and starts recording it, after the countdown when that is on. */
-	startRecording: () => typedError<null, string>(__TAURI_INVOKE("start_recording")),
+	/**
+	 *  Picks a target with `mode` and starts recording it, after the countdown when that
+	 *  is on.
+	 */
+	startRecording: (mode: PickMode) => typedError<null, string>(__TAURI_INVOKE("start_recording", { mode })),
+	/**  Picks a target with `mode` and takes a screenshot of it; `None` when cancelled. */
+	takeScreenshot: (mode: PickMode) => typedError<{
+	/**  The saved file, when saving is on. */
+	path: string | null,
+	width: number,
+	height: number,
+	copied: boolean,
+	/**  Problems that didn't stop the capture, such as a failed clipboard copy. */
+	warnings: string[],
+} | null, string>(__TAURI_INVOKE("take_screenshot", { mode })),
 	stopRecording: () => __TAURI_INVOKE<void>("stop_recording"),
 	recordingPhase: () => typedError<Phase, string>(__TAURI_INVOKE("recording_phase")),
 	listUnfinished: () => typedError<UnfinishedBundle[], string>(__TAURI_INVOKE("list_unfinished")),
@@ -92,6 +105,7 @@ export type AppInfo = {
 };
 
 export type AppSettings = {
+	version?: number,
 	screenshots?: ScreenshotSettings,
 	/**  The last background used to beautify a screenshot. */
 	beautify?: BackgroundSettings,
@@ -256,6 +270,15 @@ export type Phase = { kind: "idle" } | { kind: "picking" } | { kind: "countdown"
 /**  The countdown is over and capture is starting. */
 { kind: "starting" } | { kind: "recording"; elapsedMs: number | null } | { kind: "stopping" };
 
+/**  What the picker picks. Each mode picks one kind of target only. */
+export type PickMode = 
+/**  A drag selects a region; clicks do nothing. */
+"area" | 
+/**  The window under the pointer is highlighted; a click picks it. */
+"window" | 
+/**  The display under the pointer is highlighted; a click picks it. */
+"display";
+
 export type PreviewStats = {
 	frames: number,
 	renderMs: number | null,
@@ -329,6 +352,17 @@ export type ScreenshotSettings = {
 	saveToDisk?: boolean,
 	/**  Where captures are saved; `None` means `~/Pictures/Recast`. */
 	folder?: string | null,
+	playShutterSound?: boolean,
+};
+
+export type ScreenshotTaken = {
+	/**  The saved file, when saving is on. */
+	path: string | null,
+	width: number,
+	height: number,
+	copied: boolean,
+	/**  Problems that didn't stop the capture, such as a failed clipboard copy. */
+	warnings: string[],
 };
 
 /**  Sizes are fractions of the screen's shorter side. */
@@ -338,13 +372,16 @@ export type Shadow = {
 	offsetY?: number | null,
 };
 
-export type ShortcutAction = "record" | "captureArea" | "captureWindow";
+export type ShortcutAction = "recordArea" | "recordWindow" | "recordDisplay" | "captureArea" | "captureWindow" | "captureDisplay";
 
 /**  Global shortcuts in the form `Alt+Shift+Cmd+KeyR`; `None` turns one off. */
 export type ShortcutSettings = {
-	record?: string | null,
+	recordArea?: string | null,
+	recordWindow?: string | null,
+	recordDisplay?: string | null,
 	captureArea?: string | null,
 	captureWindow?: string | null,
+	captureDisplay?: string | null,
 };
 
 export type ShortcutStatus = {

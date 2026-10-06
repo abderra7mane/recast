@@ -6,7 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, ShortcutStatus } from "@/bindings";
 
 const SETTINGS: AppSettings = {
-  screenshots: { copyToClipboard: true, saveToDisk: true, folder: null },
+  screenshots: {
+    copyToClipboard: true,
+    saveToDisk: true,
+    folder: null,
+    playShutterSound: true,
+  },
   beautify: {},
   recording: {
     countdown: true,
@@ -15,9 +20,12 @@ const SETTINGS: AppSettings = {
     folder: "/Volumes/Work/Takes",
   },
   shortcuts: {
-    record: "Alt+Shift+Cmd+KeyR",
+    recordArea: "Alt+Shift+Cmd+KeyR",
+    recordWindow: null,
+    recordDisplay: null,
     captureArea: "Alt+Shift+Cmd+KeyS",
     captureWindow: null,
+    captureDisplay: null,
   },
   updates: { checkAutomatically: true },
   onboardingCompleted: true,
@@ -25,7 +33,7 @@ const SETTINGS: AppSettings = {
 
 const STATUSES: ShortcutStatus[] = [
   {
-    action: "record",
+    action: "recordArea",
     shortcut: "Alt+Shift+Cmd+KeyR",
     symbols: "⌥⇧⌘R",
     error: null,
@@ -36,7 +44,10 @@ const STATUSES: ShortcutStatus[] = [
     symbols: "⌥⇧⌘S",
     error: "macOS didn't accept ⌥⇧⌘S",
   },
+  { action: "recordWindow", shortcut: null, symbols: null, error: null },
+  { action: "recordDisplay", shortcut: null, symbols: null, error: null },
   { action: "captureWindow", shortcut: null, symbols: null, error: null },
+  { action: "captureDisplay", shortcut: null, symbols: null, error: null },
 ];
 
 const ok = <T,>(data: T) => Promise.resolve({ status: "ok" as const, data });
@@ -129,6 +140,20 @@ describe("Settings", () => {
       copyToClipboard: false,
       saveToDisk: true,
       folder: null,
+      playShutterSound: true,
+    });
+  });
+
+  it("turns the shutter sound off", async () => {
+    const user = await openTab("Screenshots");
+    const sound = screen.getByRole("switch", { name: "Play shutter sound" });
+    expect(sound.getAttribute("aria-checked")).toBe("true");
+    await user.click(sound);
+    expect(commands.setScreenshotSettings).toHaveBeenCalledWith({
+      copyToClipboard: true,
+      saveToDisk: true,
+      folder: null,
+      playShutterSound: false,
     });
   });
 
@@ -164,6 +189,26 @@ describe("Settings", () => {
     ).toBe("⌃⌥W");
   });
 
+  it("lists a shortcut for every record and capture mode", async () => {
+    await openTab("Shortcuts");
+    for (const name of [
+      "Record area",
+      "Record window",
+      "Record display",
+      "Capture area",
+      "Capture window",
+      "Capture display",
+    ]) {
+      expect(
+        screen.getByRole("button", { name: `${name} shortcut` }),
+      ).toBeTruthy();
+    }
+    expect(
+      screen.getByRole("button", { name: "Record display shortcut" })
+        .textContent,
+    ).toBe("Record Shortcut");
+  });
+
   it("reports a conflicting shortcut without changing it", async () => {
     const user = await openTab("Shortcuts");
     commands.setShortcut.mockReturnValue(
@@ -173,7 +218,7 @@ describe("Settings", () => {
       }),
     );
     await user.click(
-      screen.getByRole("button", { name: "Start or stop recording shortcut" }),
+      screen.getByRole("button", { name: "Record area shortcut" }),
     );
     await user.keyboard("{Alt>}{Shift>}{Meta>}[KeyS]{/Meta}{/Shift}{/Alt}");
     expect(
@@ -181,8 +226,7 @@ describe("Settings", () => {
         .textContent,
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Start or stop recording shortcut" })
-        .textContent,
+      screen.getByRole("button", { name: "Record area shortcut" }).textContent,
     ).toBe("⌥⇧⌘R");
   });
 

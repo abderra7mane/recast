@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { Circle, FolderOpen, Pencil, Settings, Square } from "lucide-react";
+import {
+  AppWindow,
+  Crop,
+  FolderOpen,
+  Monitor,
+  Pencil,
+  Settings,
+  Square,
+} from "lucide-react";
 
 import {
   commands,
   events,
   type FinishedRecording,
   type Phase,
+  type PickMode,
   type ProjectSummary,
   type UnfinishedBundle,
 } from "@/bindings";
@@ -239,34 +248,70 @@ function RecordingsCard({ projects }: { projects: ProjectSummary[] }) {
   );
 }
 
-function RecordButton({ phase }: { phase: Phase }) {
+type Outcome = { status: "ok" } | { status: "error"; error: string };
+
+const MODES: { mode: PickMode; label: string; Icon: typeof Crop }[] = [
+  { mode: "area", label: "Area", Icon: Crop },
+  { mode: "window", label: "Window", Icon: AppWindow },
+  { mode: "display", label: "Display", Icon: Monitor },
+];
+
+function Actions({ phase }: { phase: Phase }) {
   const [error, setError] = useState<string | null>(null);
-  const record = async () => {
+  const run = async (action: () => Promise<Outcome>) => {
     setError(null);
-    const result = await commands.startRecording();
+    const result = await action();
     if (result.status === "error") setError(result.error);
   };
+  const active =
+    phase.kind === "recording" ||
+    phase.kind === "countdown" ||
+    phase.kind === "starting";
   return (
-    <div className="space-y-1">
-      {phase.kind === "recording" ||
-      phase.kind === "countdown" ||
-      phase.kind === "starting" ? (
-        <Button
-          variant="destructive"
-          onClick={() => void commands.stopRecording()}
-        >
-          <Square />
-          {phase.kind === "recording"
-            ? `Stop ${formatElapsed(phase.elapsedMs)}`
-            : phase.kind === "countdown"
-              ? "Cancel Countdown"
-              : "Cancel"}
-        </Button>
-      ) : (
-        <Button disabled={phase.kind !== "idle"} onClick={() => void record()}>
-          <Circle /> Record…
-        </Button>
-      )}
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-muted-foreground w-16 text-sm">Record</span>
+        {active ? (
+          <Button
+            variant="destructive"
+            onClick={() => void commands.stopRecording()}
+          >
+            <Square />
+            {phase.kind === "recording"
+              ? `Stop ${formatElapsed(phase.elapsedMs)}`
+              : phase.kind === "countdown"
+                ? "Cancel Countdown"
+                : "Cancel"}
+          </Button>
+        ) : (
+          MODES.map(({ mode, label, Icon }) => (
+            <Button
+              key={mode}
+              variant="outline"
+              size="sm"
+              aria-label={`Record ${label}`}
+              disabled={phase.kind !== "idle"}
+              onClick={() => void run(() => commands.startRecording(mode))}
+            >
+              <Icon /> {label}
+            </Button>
+          ))
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-muted-foreground w-16 text-sm">Capture</span>
+        {MODES.map(({ mode, label, Icon }) => (
+          <Button
+            key={mode}
+            variant="outline"
+            size="sm"
+            aria-label={`Capture ${label}`}
+            onClick={() => void run(() => commands.takeScreenshot(mode))}
+          >
+            <Icon /> {label}
+          </Button>
+        ))}
+      </div>
       {error && <p className="text-destructive text-sm">{error}</p>}
     </div>
   );
@@ -332,9 +377,10 @@ export function Library() {
           >
             <Settings />
           </Button>
-          <RecordButton phase={phase} />
         </div>
       </div>
+
+      <Actions phase={phase} />
 
       {saved && <SavedCard result={saved} />}
 

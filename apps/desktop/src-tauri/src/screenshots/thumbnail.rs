@@ -1,9 +1,13 @@
 //! The floating thumbnail shown after a screenshot, in the bottom-right corner of the
 //! display it was taken on. It never activates the app.
+//!
+//! A click opens the screenshot for editing, a right-click shows its menu, a drag puts
+//! the file into another app, and a drag or two-finger swipe to the right dismisses it.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::PathBuf,
+    rc::Rc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -11,52 +15,84 @@ use std::{
     time::{Duration, Instant},
 };
 
-use dispatch2::DispatchQueue;
+use dispatch2::{DispatchQueue, DispatchTime, MainThreadBound};
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
-    rc::Retained, runtime::ProtocolObject,
+    rc::Retained, runtime::ProtocolObject, sel,
 };
 use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSColor, NSCompositingOperation, NSDragOperation,
     NSDraggingContext, NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent,
-    NSFloatingWindowLevel, NSImage, NSPanel, NSResponder, NSTrackingArea, NSTrackingAreaOptions,
-    NSView, NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
+    NSEventModifierFlags, NSEventPhase, NSFloatingWindowLevel, NSImage, NSMenu, NSMenuItem,
+    NSPanel, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSData, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL,
 };
 
-use super::thumbnail_layout::{self as layout, Button, DismissTimer};
-use crate::appkit::{self, TextStyle, color, inset, ns_rect};
+use super::thumbnail_layout::{
+    self as layout, DismissTimer, Gesture, MenuItem, ScrollPhase, SwipeUpdate, TrackpadSwipe,
+};
+use crate::appkit::{self, color, inset, ns_rect};
 
-const DRAG_THRESHOLD: f64 = 3.0;
 const CORNER_RADIUS: f64 = 10.0;
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Copy,
     Save,
-    Beautify,
+    ShowInFinder,
+    Edit,
+    Delete,
     Close,
     /// The image was dropped into another app.
     DraggedOut,
 }
 
+impl From<MenuItem> for Action {
+    fn from(item: MenuItem) -> Self {
+        match item {
+            MenuItem::Copy => Self::Copy,
+            MenuItem::Save => Self::Save,
+            MenuItem::ShowInFinder => Self::ShowInFinder,
+            MenuItem::Edit => Self::Edit,
+            MenuItem::Delete => Self::Delete,
+            MenuItem::Close => Self::Close,
+        }
+    }
+}
+
 pub type OnAction = Box<dyn Fn(Action)>;
+
+#[derive(Debug, Clone, Copy)]
+struct Press {
+    /// Pointer position in screen points (y up) at the press.
+    at: NSPoint,
+    /// The press in card coordinates (y down).
+    local_y: f64,
+    gesture: Gesture,
+}
 
 #[derive(Default)]
 struct Pointer {
     hovered: bool,
-    pressed: Option<NSPoint>,
+    press: Option<Press>,
     dragging: bool,
+    trackpad: TrackpadSwipe,
 }
 
 pub struct ViewIvars {
     image: Retained<NSImage>,
     image_size: (f64, f64),
     file: PathBuf,
+    /// The card's resting origin in screen points.
+    home: NSPoint,
     pointer: RefCell<Pointer>,
     timer: Arc<Mutex<DismissTimer>>,
+    /// Bumped to stop a running animation.
+    animation: Rc<Cell<u64>>,
     on_action: OnAction,
 }
 
@@ -88,56 +124,132 @@ define_class!(
         fn mouse_entered(&self, _event: &NSEvent) {
             self.ivars().pointer.borrow_mut().hovered = true;
             self.timer().pause(Instant::now());
-            self.setNeedsDisplay(true);
         }
 
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
-            let dragging = {
+            let busy = {
                 let mut pointer = self.ivars().pointer.borrow_mut();
                 pointer.hovered = false;
-                pointer.dragging
+                pointer.dragging || pointer.press.is_some()
             };
-            if !dragging {
+            if !busy {
                 self.timer().resume(Instant::now());
             }
-            self.setNeedsDisplay(true);
         }
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            self.ivars().pointer.borrow_mut().pressed = Some(self.local(event));
+            if event.modifierFlags().contains(NSEventModifierFlags::Control) {
+                self.show_menu(event);
+                return;
+            }
+            self.stop_animation();
+            let local_y = self.local(event).y;
+            self.ivars().pointer.borrow_mut().press = Some(Press {
+                at: NSEvent::mouseLocation(),
+                local_y,
+                gesture: Gesture::Undecided,
+            });
         }
 
         #[unsafe(method(mouseDragged:))]
         fn mouse_dragged(&self, event: &NSEvent) {
-            let at = self.local(event);
-            let start = {
-                let pointer = self.ivars().pointer.borrow();
-                match pointer.pressed {
-                    Some(p) if !pointer.dragging && self.button_at(p).is_none() => p,
-                    _ => return,
-                }
+            let Some(press) = self.ivars().pointer.borrow().press else {
+                return;
             };
-            if (at.x - start.x).hypot(at.y - start.y) >= DRAG_THRESHOLD {
-                self.start_drag(event);
+            let now = NSEvent::mouseLocation();
+            let (dx, dy) = (now.x - press.at.x, press.at.y - now.y);
+            let gesture = match press.gesture {
+                Gesture::Undecided => layout::classify(dx, dy),
+                Gesture::Swipe if layout::swipe_strays(press.local_y + dy, self.card().1) => {
+                    Gesture::DragOut
+                }
+                decided => decided,
+            };
+            match gesture {
+                Gesture::Undecided => {}
+                Gesture::Swipe => {
+                    self.set_press_gesture(Gesture::Swipe);
+                    self.move_card(layout::swipe_offset(dx));
+                }
+                Gesture::DragOut => {
+                    self.move_card(0.0);
+                    self.start_drag(event);
+                }
             }
         }
 
         #[unsafe(method(mouseUp:))]
-        fn mouse_up(&self, event: &NSEvent) {
-            let pressed = self.ivars().pointer.borrow_mut().pressed.take();
-            let Some(pressed) = pressed else {
+        fn mouse_up(&self, _event: &NSEvent) {
+            let press = self.ivars().pointer.borrow_mut().press.take();
+            let Some(press) = press else {
                 return;
             };
-            let button = self.button_at(pressed);
-            if button.is_some() && button == self.button_at(self.local(event)) {
-                (self.ivars().on_action)(match button.expect("checked") {
-                    Button::Close => Action::Close,
-                    Button::Copy => Action::Copy,
-                    Button::Save => Action::Save,
-                    Button::Beautify => Action::Beautify,
-                });
+            match press.gesture {
+                Gesture::Undecided => (self.ivars().on_action)(Action::Edit),
+                Gesture::Swipe => {
+                    let dx = NSEvent::mouseLocation().x - press.at.x;
+                    if layout::swipe_dismisses(layout::swipe_offset(dx)) {
+                        (self.ivars().on_action)(Action::Close);
+                    } else {
+                        self.snap_back();
+                        self.resume_unless_hovered();
+                    }
+                }
+                Gesture::DragOut => {}
+            }
+        }
+
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            self.show_menu(event);
+        }
+
+        #[unsafe(method(scrollWheel:))]
+        fn scroll_wheel(&self, event: &NSEvent) {
+            if !event.hasPreciseScrollingDeltas() {
+                return;
+            }
+            let phase = if event.momentumPhase() != NSEventPhase::None {
+                ScrollPhase::Other
+            } else {
+                match event.phase() {
+                    NSEventPhase::Began => ScrollPhase::Began,
+                    NSEventPhase::Changed => ScrollPhase::Changed,
+                    NSEventPhase::Ended => ScrollPhase::Ended,
+                    NSEventPhase::Cancelled => ScrollPhase::Cancelled,
+                    _ => ScrollPhase::Other,
+                }
+            };
+            let inverted = event.isDirectionInvertedFromDevice();
+            let dx = layout::finger_delta(event.scrollingDeltaX(), inverted);
+            let dy = layout::finger_delta(event.scrollingDeltaY(), inverted);
+            let update = self
+                .ivars()
+                .pointer
+                .borrow_mut()
+                .trackpad
+                .scroll(phase, dx, dy);
+            match update {
+                SwipeUpdate::Ignore => {}
+                SwipeUpdate::Follow(offset) => {
+                    self.stop_animation();
+                    self.timer().pause(Instant::now());
+                    self.move_card(offset);
+                }
+                SwipeUpdate::Dismiss => (self.ivars().on_action)(Action::Close),
+                SwipeUpdate::SnapBack => {
+                    self.snap_back();
+                    self.resume_unless_hovered();
+                }
+            }
+        }
+
+        #[unsafe(method(thumbnailMenuItem:))]
+        fn menu_item(&self, sender: &NSMenuItem) {
+            if let Some(item) = MenuItem::from_tag(sender.tag()) {
+                (self.ivars().on_action)(item.into());
             }
         }
     }
@@ -161,15 +273,11 @@ define_class!(
             _point: NSPoint,
             operation: NSDragOperation,
         ) {
-            let hovered = {
-                let mut pointer = self.ivars().pointer.borrow_mut();
-                pointer.dragging = false;
-                pointer.hovered
-            };
+            self.ivars().pointer.borrow_mut().dragging = false;
             if operation != NSDragOperation::None {
                 (self.ivars().on_action)(Action::DraggedOut);
-            } else if !hovered {
-                self.timer().resume(Instant::now());
+            } else {
+                self.resume_unless_hovered();
             }
         }
     }
@@ -178,6 +286,12 @@ define_class!(
 impl ThumbnailView {
     fn timer(&self) -> std::sync::MutexGuard<'_, DismissTimer> {
         self.ivars().timer.lock().expect("timer lock")
+    }
+
+    fn resume_unless_hovered(&self) {
+        if !self.ivars().pointer.borrow().hovered {
+            self.timer().resume(Instant::now());
+        }
     }
 
     fn card(&self) -> (f64, f64) {
@@ -189,15 +303,78 @@ impl ThumbnailView {
         self.convertPoint_fromView(event.locationInWindow(), None)
     }
 
-    fn button_at(&self, p: NSPoint) -> Option<Button> {
-        layout::button_at(self.card(), p.x, p.y)
+    fn set_press_gesture(&self, gesture: Gesture) {
+        if let Some(press) = self.ivars().pointer.borrow_mut().press.as_mut() {
+            press.gesture = gesture;
+        }
+    }
+
+    /// Moves the card `offset` points right of its resting place.
+    fn move_card(&self, offset: f64) {
+        if let Some(window) = self.window() {
+            let home = self.ivars().home;
+            window.setFrameOrigin(NSPoint::new(home.x + offset, home.y));
+        }
+    }
+
+    fn stop_animation(&self) {
+        let generation = &self.ivars().animation;
+        generation.set(generation.get() + 1);
+    }
+
+    fn snap_back(&self) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let from = window.frame().origin.x;
+        let home = self.ivars().home.x;
+        let panel = window
+            .downcast::<NSPanel>()
+            .expect("the thumbnail is a panel");
+        self.stop_animation();
+        animate(
+            panel,
+            self.ivars().animation.clone(),
+            layout::SNAP_BACK,
+            Box::new(move |t| (layout::snap_back_at(from, home, t), 1.0)),
+            Box::new(|_| {}),
+            self.mtm(),
+        );
+    }
+
+    fn show_menu(&self, event: &NSEvent) {
+        let mtm = self.mtm();
+        let menu = NSMenu::new(mtm);
+        menu.setAutoenablesItems(false);
+        for entry in MenuItem::MENU {
+            let Some(item) = entry else {
+                menu.addItem(&NSMenuItem::separatorItem(mtm));
+                continue;
+            };
+            // SAFETY: the action takes an NSMenuItem sender, as `menu_item` does.
+            let menu_item = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mtm),
+                    &NSString::from_str(item.title()),
+                    Some(sel!(thumbnailMenuItem:)),
+                    &NSString::new(),
+                )
+            };
+            menu_item.setTag(item.tag());
+            // SAFETY: the view outlives the menu, which only lives during the call below.
+            unsafe { menu_item.setTarget(Some(self)) };
+            menu.addItem(&menu_item);
+        }
+        self.timer().pause(Instant::now());
+        NSMenu::popUpContextMenu_withEvent_forView(&menu, event, self);
+        self.resume_unless_hovered();
     }
 
     fn start_drag(&self, event: &NSEvent) {
         {
             let mut pointer = self.ivars().pointer.borrow_mut();
             pointer.dragging = true;
-            pointer.pressed = None;
+            pointer.press = None;
         }
         self.timer().pause(Instant::now());
         let path = NSString::from_str(&self.ivars().file.to_string_lossy());
@@ -217,7 +394,6 @@ impl ThumbnailView {
 
     fn draw(&self) {
         let bounds = self.bounds();
-        let card = self.card();
         let ivars = self.ivars();
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(
             bounds,
@@ -226,7 +402,7 @@ impl ThumbnailView {
         )
         .addClip();
         appkit::fill(bounds, &color(0.12, 0.12, 0.13, 1.0));
-        let image_rect = ns_rect(&layout::image_rect(card, ivars.image_size));
+        let image_rect = ns_rect(&layout::image_rect(self.card(), ivars.image_size));
         // SAFETY: a zero source rect draws the whole image; no hints are passed.
         unsafe {
             ivars
@@ -240,27 +416,79 @@ impl ThumbnailView {
                     None,
                 )
         };
-        if ivars.pointer.borrow().hovered {
-            appkit::fill(bounds, &color(0.0, 0.0, 0.0, 0.45));
-            let dark = TextStyle::new(13.0, &color(0.1, 0.1, 0.1, 1.0));
-            let light = TextStyle::new(11.0, &NSColor::whiteColor());
-            for (button, rect) in layout::buttons(card) {
-                let r = ns_rect(&rect);
-                if button == Button::Close {
-                    appkit::fill_rounded(r, r.size.width / 2.0, &color(0.0, 0.0, 0.0, 0.65));
-                    light.draw_centered(button.label(), r);
-                } else {
-                    appkit::fill_rounded(r, r.size.height / 2.0, &color(1.0, 1.0, 1.0, 0.92));
-                    dark.draw_centered(button.label(), r);
-                }
-            }
-        }
         appkit::stroke_rounded(
             inset(bounds, 0.5, 0.5),
             CORNER_RADIUS,
             1.0,
             &color(1.0, 1.0, 1.0, 0.18),
         );
+    }
+}
+
+/// Maps animation progress (0 to 1) to the card's x and opacity.
+type Step = Box<dyn Fn(f64) -> (f64, f64)>;
+type Finish = Box<dyn FnOnce(MainThreadMarker)>;
+
+struct Animation {
+    panel: Retained<NSPanel>,
+    generation: Rc<Cell<u64>>,
+    id: u64,
+    start: Instant,
+    duration: Duration,
+    step: Step,
+    finish: Option<Finish>,
+}
+
+/// Moves and fades `panel` frame by frame on the main queue; a newer animation on the
+/// same `generation` stops it.
+fn animate(
+    panel: Retained<NSPanel>,
+    generation: Rc<Cell<u64>>,
+    duration: Duration,
+    step: Step,
+    finish: Finish,
+    mtm: MainThreadMarker,
+) {
+    let id = generation.get();
+    tick(
+        Animation {
+            panel,
+            generation,
+            id,
+            start: Instant::now(),
+            duration,
+            step,
+            finish: Some(finish),
+        },
+        mtm,
+    );
+}
+
+fn tick(mut animation: Animation, mtm: MainThreadMarker) {
+    if animation.generation.get() != animation.id {
+        return;
+    }
+    let progress = (animation.start.elapsed().as_secs_f64()
+        / animation.duration.as_secs_f64().max(1e-3))
+    .min(1.0);
+    let (x, alpha) = (animation.step)(progress);
+    let y = animation.panel.frame().origin.y;
+    animation.panel.setFrameOrigin(NSPoint::new(x, y));
+    animation.panel.setAlphaValue(alpha);
+    if progress >= 1.0 {
+        if let Some(finish) = animation.finish.take() {
+            finish(mtm);
+        }
+        return;
+    }
+    let next = MainThreadBound::new(animation, mtm);
+    let when = DispatchTime::try_from(FRAME_INTERVAL).unwrap_or(DispatchTime::NOW);
+    let queued = DispatchQueue::main().after(when, move || {
+        let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+        tick(next.into_inner(mtm), mtm);
+    });
+    if queued.is_err() {
+        log::warn!("cannot animate the thumbnail");
     }
 }
 
@@ -329,8 +557,10 @@ pub fn show(mtm: MainThreadMarker, thumbnail: Thumbnail, on_action: OnAction) {
         image,
         image_size: thumbnail.size,
         file: thumbnail.file,
+        home: frame.origin,
         pointer: RefCell::default(),
         timer: timer.clone(),
+        animation: Rc::default(),
         on_action,
     });
     let content = NSRect::new(NSPoint::ZERO, frame.size);
@@ -392,7 +622,8 @@ pub fn show(mtm: MainThreadMarker, thumbnail: Thumbnail, on_action: OnAction) {
     }
 }
 
-/// Closes the thumbnail with `id`, or whichever is shown when `id` is `None`.
+/// Slides the thumbnail with `id`, or whichever is shown when `id` is `None`, out to the
+/// right and releases it.
 pub fn close(id: Option<u64>, mtm: MainThreadMarker) {
     let taken = SHOWN.with_borrow_mut(|shown| {
         if shown
@@ -404,9 +635,63 @@ pub fn close(id: Option<u64>, mtm: MainThreadMarker) {
             None
         }
     });
-    if let Some(shown) = taken {
-        shown.closed.store(true, Ordering::SeqCst);
-        shown.panel.orderOut(None);
-        appkit::release_later((shown.panel, shown.view), mtm);
+    let Some(Shown {
+        panel,
+        view,
+        closed,
+        ..
+    }) = taken
+    else {
+        return;
+    };
+    closed.store(true, Ordering::SeqCst);
+    panel.setIgnoresMouseEvents(true);
+    let frame = appkit::rect(panel.frame());
+    let Some(screen) = panel.screen() else {
+        panel.orderOut(None);
+        appkit::release_later((panel, view), mtm);
+        return;
+    };
+    let end_x = layout::slide_out_frame(&frame, &appkit::rect(screen.frame())).x;
+    let generation = view.ivars().animation.clone();
+    generation.set(generation.get() + 1);
+    let width = frame.width;
+    let start_x = frame.x;
+    let finish_panel = panel.clone();
+    animate(
+        panel,
+        generation,
+        layout::SLIDE_OUT,
+        Box::new(move |t| layout::slide_out_at(start_x, end_x, width, t)),
+        Box::new(move |mtm| {
+            finish_panel.orderOut(None);
+            appkit::release_later((finish_panel, view), mtm);
+        }),
+        mtm,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_items_become_their_actions() {
+        let actions: Vec<Action> = MenuItem::MENU
+            .into_iter()
+            .flatten()
+            .map(Action::from)
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                Action::Copy,
+                Action::Save,
+                Action::ShowInFinder,
+                Action::Edit,
+                Action::Delete,
+                Action::Close
+            ]
+        );
     }
 }

@@ -115,13 +115,18 @@ fn close_overlays(app: &AppHandle) {
     });
 }
 
-/// Picks a target and starts the countdown, or records right away when it is off.
-pub async fn start(app: AppHandle) -> Result<(), String> {
+/// Picks a target with `mode` and starts the countdown, or records right away when it
+/// is off.
+pub async fn start(app: AppHandle, mode: PickMode) -> Result<(), String> {
     let flow = app.state::<Flow>();
     flow.begin_pick()?;
     changed(&app);
     let library = picker::hide_library(&app);
-    let picked = picker::pick(&app, PickMode::Window).await;
+    let picked = picker::pick(
+        &app,
+        picker::PickRequest::new(mode, picker::Purpose::Record),
+    )
+    .await;
     picker::show_library(library);
     let pick = match picked {
         Ok(Some(pick)) => pick,
@@ -316,10 +321,11 @@ pub async fn cancel(app: AppHandle) {
     changed(&app);
 }
 
-pub async fn toggle(app: AppHandle) {
+/// Starts recording with `mode` when idle; stops the recording or countdown otherwise.
+pub async fn toggle(app: AppHandle, mode: PickMode) {
     match app.state::<Flow>().phase() {
         Phase::Idle => {
-            if let Err(e) = start(app.clone()).await {
+            if let Err(e) = start(app.clone(), mode).await {
                 alert::error(&app, e);
             }
         }

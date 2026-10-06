@@ -20,6 +20,7 @@ cidre.workspace = true
 workspace = true
 
 [dev-dependencies]
+objc2.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 

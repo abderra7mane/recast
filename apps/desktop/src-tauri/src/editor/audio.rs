@@ -1,8 +1,10 @@
 //! Preview audio: mixes the recorded tracks and click sounds from the playback
 //! position and plays them on the default output device. What the device has
-//! played is the playback clock; without a device a wall clock stands in.
+//! played is the playback clock; without a device a wall clock stands in, also when
+//! the device stops calling back.
 
 use std::{
+    any::Any,
     collections::VecDeque,
     path::PathBuf,
     sync::{Arc, Condvar, Mutex},
@@ -23,6 +25,9 @@ const BUFFER_MS: f64 = 120.0;
 const CHUNK_FRAMES: usize = 1_024;
 /// The mix continues this long past the end of the recording, so the clock does too.
 const TAIL_MS: f64 = 2_000.0;
+/// How long playback waits for the device to call back before keeping time with the
+/// wall clock for the rest of the session.
+const STALL: Duration = Duration::from_millis(300);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MixTrack {
@@ -57,6 +62,10 @@ struct Queue {
     anchor: Option<(Instant, f64)>,
     /// Set when there is no output device.
     wall_start: Option<Instant>,
+    /// When playback last started.
+    requested: Option<Instant>,
+    /// When the device last called back.
+    last_callback: Option<Instant>,
 }
 
 struct Shared {
@@ -78,13 +87,22 @@ struct Output {
     channels: usize,
 }
 
+/// Opens an output that calls `fill`; the guard keeps it playing until dropped.
+type Opener = fn(&Arc<Shared>) -> Option<(Box<dyn Any>, Output)>;
+
+fn no_output(_: &Arc<Shared>) -> Option<(Box<dyn Any>, Output)> {
+    None
+}
+
 impl AudioPlayer {
     pub fn start(clicks: Vec<Click>, mix: MixSpec, duration_ms: f64) -> Self {
-        Self::start_with(clicks, mix, duration_ms, true)
+        // Tests keep time with the wall clock, so they don't depend on this Mac's output.
+        let opener: Opener = if cfg!(test) { no_output } else { open_output };
+        Self::start_with(clicks, mix, duration_ms, opener)
     }
 
-    /// `use_device` false plays nothing and keeps time with the wall clock.
-    fn start_with(clicks: Vec<Click>, mix: MixSpec, duration_ms: f64, use_device: bool) -> Self {
+    /// Without an output from `open`, it plays nothing and keeps time with the wall clock.
+    fn start_with(clicks: Vec<Click>, mix: MixSpec, duration_ms: f64, open: Opener) -> Self {
         let shared = Arc::new(Shared {
             control: Mutex::new(Control {
                 generation: 0,
@@ -102,6 +120,8 @@ impl AudioPlayer {
                 start_ms: 0.0,
                 anchor: None,
                 wall_start: None,
+                requested: None,
+                last_callback: None,
             }),
             output: Mutex::new(None),
         });
@@ -109,7 +129,7 @@ impl AudioPlayer {
             let shared = shared.clone();
             thread::Builder::new()
                 .name("preview-audio".into())
-                .spawn(move || run(&shared, &clicks, duration_ms, use_device))
+                .spawn(move || run(&shared, &clicks, duration_ms, open))
                 .ok()
         };
         Self { shared, thread }
@@ -130,6 +150,7 @@ impl AudioPlayer {
         queue.next_ms = control.start_ms;
         queue.anchor = None;
         queue.wall_start = (control.playing && no_device).then(Instant::now);
+        queue.requested = control.playing.then(Instant::now);
         drop(queue);
         self.shared.wake.notify_all();
     }
@@ -173,20 +194,9 @@ impl AudioPlayer {
     /// The timeline time being heard now.
     pub fn position_ms(&self) -> f64 {
         let queue = self.shared.queue.lock().expect("audio queue");
-        if let Some(started) = queue.wall_start {
-            return queue.start_ms + started.elapsed().as_secs_f64() * 1000.0;
-        }
-        match queue.anchor {
-            Some((at, t_ms)) => {
-                let now = Instant::now();
-                let since = if now >= at {
-                    now.duration_since(at).as_secs_f64() * 1000.0
-                } else {
-                    -(at.duration_since(now).as_secs_f64() * 1000.0)
-                };
-                (t_ms + since).clamp(queue.start_ms, queue.next_ms.max(queue.start_ms))
-            }
-            None => queue.start_ms,
+        match queue.wall_start {
+            Some(started) => queue.start_ms + started.elapsed().as_secs_f64() * 1000.0,
+            None => heard_ms(&queue),
         }
     }
 
@@ -205,7 +215,7 @@ impl Drop for AudioPlayer {
     }
 }
 
-fn open_output(shared: &Arc<Shared>) -> Option<(cpal::Stream, Output)> {
+fn open_output(shared: &Arc<Shared>) -> Option<(Box<dyn Any>, Output)> {
     let device = cpal::default_host().default_output_device()?;
     let config = match device.default_output_config() {
         Ok(config) => config,
@@ -226,7 +236,11 @@ fn open_output(shared: &Arc<Shared>) -> Option<(cpal::Stream, Output)> {
     let callback_shared = shared.clone();
     let stream = device.build_output_stream::<f32, _, _>(
         stream_config,
-        move |data, info| fill(&callback_shared, output, data, info),
+        move |data, info: &cpal::OutputCallbackInfo| {
+            let stamp = info.timestamp();
+            let latency = stamp.playback.duration_since(stamp.callback);
+            fill(&callback_shared, output, data, latency);
+        },
         |e| log::warn!("audio output: {e}"),
         None,
     );
@@ -241,15 +255,17 @@ fn open_output(shared: &Arc<Shared>) -> Option<(cpal::Stream, Output)> {
         log::warn!("cannot start audio output: {e}");
         return None;
     }
-    Some((stream, output))
+    Some((Box::new(stream), output))
 }
 
 /// The device callback: hands queued samples to the device and moves the clock.
-fn fill(shared: &Shared, output: Output, data: &mut [f32], info: &cpal::OutputCallbackInfo) {
+/// `latency` is how long until the first sample is heard.
+fn fill(shared: &Shared, output: Output, data: &mut [f32], latency: Duration) {
     let Ok(mut queue) = shared.queue.try_lock() else {
         data.fill(0.0);
         return;
     };
+    queue.last_callback = Some(Instant::now());
     if !queue.playing {
         data.fill(0.0);
         return;
@@ -262,21 +278,58 @@ fn fill(shared: &Shared, output: Output, data: &mut [f32], info: &cpal::OutputCa
     }
     data[n..].fill(0.0);
     if n > 0 {
-        let stamp = info.timestamp();
-        let latency = stamp.playback.duration_since(stamp.callback);
         let first_ms = queue.next_ms;
         queue.anchor = Some((Instant::now() + latency, first_ms));
         queue.next_ms += (n / output.channels) as f64 * 1000.0 / output.rate as f64;
     }
 }
 
-fn run(shared: &Arc<Shared>, clicks: &[Click], duration_ms: f64, use_device: bool) {
-    let device = if use_device {
-        open_output(shared)
-    } else {
-        None
-    };
-    let output = device.as_ref().map(|(_, o)| *o);
+/// The clock position now, from the device's anchor or the playback start.
+fn heard_ms(queue: &Queue) -> f64 {
+    match queue.anchor {
+        Some((at, t_ms)) => {
+            let now = Instant::now();
+            let since = if now >= at {
+                now.duration_since(at).as_secs_f64() * 1000.0
+            } else {
+                -(at.duration_since(now).as_secs_f64() * 1000.0)
+            };
+            (t_ms + since).clamp(queue.start_ms, queue.next_ms.max(queue.start_ms))
+        }
+        None => queue.start_ms,
+    }
+}
+
+/// Whether playback has waited too long for the device: no callback since it started,
+/// or none for a while.
+fn stalled(queue: &Queue, now: Instant) -> bool {
+    if !queue.playing || queue.wall_start.is_some() {
+        return false;
+    }
+    queue
+        .requested
+        .into_iter()
+        .chain(queue.last_callback)
+        .max()
+        .is_some_and(|since| now.saturating_duration_since(since) > STALL)
+}
+
+/// Moves a stalled playback to the wall clock, from the position heard so far.
+fn fall_back_to_wall_clock(shared: &Shared) {
+    *shared.output.lock().expect("audio output") = Some(false);
+    let mut queue = shared.queue.lock().expect("audio queue");
+    queue.start_ms = heard_ms(&queue);
+    queue.next_ms = queue.start_ms;
+    queue.samples.clear();
+    queue.anchor = None;
+    if queue.playing {
+        queue.wall_start = Some(Instant::now());
+    }
+}
+
+fn run(shared: &Arc<Shared>, clicks: &[Click], duration_ms: f64, open: Opener) {
+    let mut device = open(shared);
+    let mut output = device.as_ref().map(|(_, o)| *o);
     *shared.output.lock().expect("audio output") = Some(output.is_some());
     let mut seen = u64::MAX;
     let mut mixer: Option<Mixer> = None;
@@ -307,8 +360,18 @@ fn run(shared: &Arc<Shared>, clicks: &[Click], duration_ms: f64, use_device: boo
             control = shared.control.lock().expect("audio control");
             continue;
         }
-        if let (Some(mix), Some(output)) = (mixer.as_mut(), output) {
-            let target = (BUFFER_MS * output.rate as f64 / 1000.0) as usize * output.channels;
+        if output.is_some() && stalled(&shared.queue.lock().expect("audio queue"), Instant::now()) {
+            log::warn!("the audio output stopped calling back; the preview plays silently");
+            drop(control);
+            fall_back_to_wall_clock(shared);
+            drop(device.take());
+            output = None;
+            mixer = None;
+            control = shared.control.lock().expect("audio control");
+            continue;
+        }
+        if let (Some(mix), Some(out)) = (mixer.as_mut(), output) {
+            let target = (BUFFER_MS * out.rate as f64 / 1000.0) as usize * out.channels;
             drop(control);
             while shared.queue.lock().expect("audio queue").samples.len() < target {
                 let chunk = match mix.next_chunk(CHUNK_FRAMES) {
@@ -319,8 +382,8 @@ fn run(shared: &Arc<Shared>, clicks: &[Click], duration_ms: f64, use_device: boo
                         vec![0.0; CHUNK_FRAMES * 2]
                     }
                 };
-                let mut converted = Vec::with_capacity(chunk.len() * output.channels);
-                resampler.process(&chunk, output, &mut converted);
+                let mut converted = Vec::with_capacity(chunk.len() * out.channels);
+                resampler.process(&chunk, out, &mut converted);
                 let mut queue = shared.queue.lock().expect("audio queue");
                 if queue.generation != seen {
                     break;
@@ -331,6 +394,12 @@ fn run(shared: &Arc<Shared>, clicks: &[Click], duration_ms: f64, use_device: boo
             control = shared
                 .wake
                 .wait_timeout(control, Duration::from_millis(10))
+                .expect("audio control")
+                .0;
+        } else if output.is_some() {
+            control = shared
+                .wake
+                .wait_timeout(control, Duration::from_millis(50))
                 .expect("audio control")
                 .0;
         } else {
@@ -430,59 +499,147 @@ mod tests {
         }
     }
 
-    fn silent_player() -> AudioPlayer {
-        silent_player_with(true)
-    }
-
-    fn silent_player_with(use_device: bool) -> AudioPlayer {
-        let player = AudioPlayer::start_with(Vec::new(), silent_mix(), 10_000.0, use_device);
+    fn player_with(open: Opener) -> AudioPlayer {
+        let player = AudioPlayer::start_with(Vec::new(), silent_mix(), 10_000.0, open);
         while player.has_output().is_none() {
             std::thread::sleep(Duration::from_millis(5));
         }
         player
     }
 
+    fn silent_player() -> AudioPlayer {
+        player_with(no_output)
+    }
+
+    const FAKE_OUTPUT: Output = Output {
+        rate: SAMPLE_RATE,
+        channels: 2,
+    };
+
+    /// A device that opens but never calls back.
+    fn mute_device(_: &Arc<Shared>) -> Option<(Box<dyn Any>, Output)> {
+        Some((Box::new(()), FAKE_OUTPUT))
+    }
+
+    struct StopOnDrop(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// A device that calls back every 10 ms for 300 ms, then goes quiet.
+    fn failing_device(shared: &Arc<Shared>) -> Option<(Box<dyn Any>, Output)> {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (shared, stopped) = (shared.clone(), stop.clone());
+        thread::spawn(move || {
+            let started = Instant::now();
+            let mut data = vec![0.0; 480 * 2];
+            while started.elapsed() < Duration::from_millis(300)
+                && !stopped.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                fill(&shared, FAKE_OUTPUT, &mut data, Duration::ZERO);
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+        Some((Box::new(StopOnDrop(stop)), FAKE_OUTPUT))
+    }
+
     #[test]
     fn the_clock_restarts_at_once_on_play() {
         let player = silent_player();
         player.play(4_000.0);
-        assert_eq!(player.position_ms(), 4_000.0);
+        let started = player.position_ms();
+        assert!((4_000.0..4_020.0).contains(&started), "{started}");
         std::thread::sleep(Duration::from_millis(400));
         let played = player.position_ms();
-        assert!(played > 4_150.0 && played < 4_500.0, "{played}");
+        assert!(played > 4_350.0 && played < 4_600.0, "{played}");
 
         player.play(1_000.0);
         let restarted = player.position_ms();
         assert!((1_000.0..1_050.0).contains(&restarted), "{restarted}");
         std::thread::sleep(Duration::from_millis(400));
-        assert!(player.position_ms() > 1_150.0);
+        assert!(player.position_ms() > 1_350.0);
 
         player.pause();
+        let paused = player.position_ms();
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(player.position_ms(), paused);
         player.play(500.0);
         assert!(player.position_ms() < 550.0);
     }
 
     #[test]
     fn a_mix_change_keeps_the_position() {
-        for use_device in [true, false] {
-            let player = silent_player_with(use_device);
-            player.play(1_000.0);
-            std::thread::sleep(Duration::from_millis(400));
-            let before = player.position_ms();
-            assert!(before > 1_150.0, "{before}");
-            player.set_mix(MixSpec {
-                sounds: SoundSettings {
-                    volume: 0.2,
-                    ..silent_mix().sounds
-                },
-                ..silent_mix()
-            });
-            let after = player.position_ms();
-            assert!(
-                after >= before - 150.0,
-                "device {use_device}: {before} then {after}"
-            );
+        let player = silent_player();
+        player.play(1_000.0);
+        std::thread::sleep(Duration::from_millis(400));
+        let before = player.position_ms();
+        assert!(before > 1_350.0, "{before}");
+        player.set_mix(MixSpec {
+            sounds: SoundSettings {
+                volume: 0.2,
+                ..silent_mix().sounds
+            },
+            ..silent_mix()
+        });
+        let after = player.position_ms();
+        assert!(
+            after >= before && after < before + 50.0,
+            "{before} then {after}"
+        );
+    }
+
+    #[test]
+    fn a_device_that_never_calls_back_falls_back_to_the_wall_clock() {
+        let player = player_with(mute_device);
+        assert_eq!(player.has_output(), Some(true));
+        player.play(1_000.0);
+        std::thread::sleep(Duration::from_millis(800));
+        let played = player.position_ms();
+        assert!(played > 1_300.0 && played < 1_900.0, "{played}");
+        assert_eq!(player.has_output(), Some(false));
+
+        player.pause();
+        player.play(5_000.0);
+        std::thread::sleep(Duration::from_millis(200));
+        let replayed = player.position_ms();
+        assert!(replayed > 5_150.0 && replayed < 5_400.0, "{replayed}");
+    }
+
+    #[test]
+    fn a_device_that_stops_calling_back_hands_over_without_a_jump() {
+        let player = player_with(failing_device);
+        player.play(0.0);
+        std::thread::sleep(Duration::from_millis(250));
+        let on_device = player.position_ms();
+        assert!(on_device > 100.0, "the device moved the clock: {on_device}");
+        assert_eq!(player.has_output(), Some(true));
+
+        let mut last = on_device;
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_millis(900) {
+            let now = player.position_ms();
+            assert!(now >= last - 1.0, "went back from {last} to {now}");
+            last = now;
+            std::thread::sleep(Duration::from_millis(20));
         }
+        assert_eq!(player.has_output(), Some(false));
+        assert!(last > 700.0, "kept going on the wall clock: {last}");
+    }
+
+    /// Needs a working default output device.
+    #[test]
+    #[ignore]
+    fn the_default_output_moves_the_clock() {
+        let player = player_with(open_output);
+        assert_eq!(player.has_output(), Some(true));
+        player.play(4_000.0);
+        std::thread::sleep(Duration::from_millis(400));
+        let played = player.position_ms();
+        assert!(played > 4_150.0 && played < 4_500.0, "{played}");
+        assert_eq!(player.has_output(), Some(true), "no fallback");
     }
 
     #[test]

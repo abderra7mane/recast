@@ -24,9 +24,12 @@ import {
 import { ShortcutRecorder } from "@/settings/ShortcutRecorder";
 
 const SHORTCUTS: { action: ShortcutAction; label: string }[] = [
-  { action: "record", label: "Start or stop recording" },
+  { action: "recordArea", label: "Record area" },
+  { action: "recordWindow", label: "Record window" },
+  { action: "recordDisplay", label: "Record display" },
   { action: "captureArea", label: "Capture area" },
   { action: "captureWindow", label: "Capture window" },
+  { action: "captureDisplay", label: "Capture display" },
 ];
 
 function Toggle({
@@ -317,6 +320,12 @@ export function Settings() {
             folder={settings.screenshots.folder}
             fallback={DEFAULT_SCREENSHOTS_FOLDER}
             onChange={(folder) => screenshots({ folder })}
+          />
+          <Toggle
+            id="play-shutter-sound"
+            label="Play shutter sound"
+            checked={settings.screenshots.playShutterSound}
+            onChange={(playShutterSound) => screenshots({ playShutterSound })}
           />
         </TabsContent>
 

@@ -2,6 +2,7 @@ mod actions;
 pub mod activation;
 mod alert;
 mod appkit;
+mod crash;
 pub mod diagnostics;
 pub mod editor;
 pub mod flow;
@@ -29,6 +30,7 @@ use std::path::Path;
 use editor::commands::{self as editor_commands, Editors, ExportFinished, ExportProgress};
 use flow::{Flow, Phase};
 use hotkeys::ShortcutStatus;
+use recast_capture::picker::PickMode;
 use recast_input::{Permission, PermissionState, Permissions};
 use recast_project::UnfinishedBundle;
 use recording::FinishedRecording;
@@ -53,15 +55,38 @@ async fn request_permission(permission: Permission) -> PermissionState {
     recast_input::request_permission(permission)
 }
 
-/// Picks a target and starts recording it, after the countdown when that is on.
-#[tauri::command]
-#[specta::specta]
-async fn start_recording(app: AppHandle) -> Result<(), String> {
+fn require_screen_recording(app: &AppHandle) -> Result<(), String> {
     if recast_input::check_permissions().screen_recording != PermissionState::Granted {
-        windows::show(&app, windows::ONBOARDING)?;
+        windows::show(app, windows::ONBOARDING)?;
         return Err("Recast needs the Screen Recording permission.".into());
     }
-    recording_ui::start(app).await
+    Ok(())
+}
+
+/// Picks a target with `mode` and starts recording it, after the countdown when that
+/// is on.
+#[tauri::command]
+#[specta::specta]
+async fn start_recording(app: AppHandle, mode: PickMode) -> Result<(), String> {
+    require_screen_recording(&app)?;
+    recording_ui::start(app, mode).await
+}
+
+/// Picks a target with `mode` and takes a screenshot of it; `None` when cancelled.
+#[tauri::command]
+#[specta::specta]
+async fn take_screenshot(
+    app: AppHandle,
+    mode: PickMode,
+) -> Result<Option<screenshots::ScreenshotTaken>, String> {
+    require_screen_recording(&app)?;
+    let taken = screenshots::take(&app, mode).await?;
+    if let Some(taken) = &taken {
+        for warning in &taken.warnings {
+            log::warn!("screenshot: {warning}");
+        }
+    }
+    Ok(taken)
 }
 
 #[tauri::command]
@@ -98,13 +123,8 @@ async fn recover_bundle(app: AppHandle, path: String) -> Result<FinishedRecordin
 
 /// Moves a crashed recording's bundle to the Trash.
 pub fn discard_bundle(path: &Path) -> Result<(), String> {
-    use objc2_foundation::{NSFileManager, NSString, NSURL};
-
     let bundle = recast_project::Bundle::open_crashed(path).map_err(|e| e.to_string())?;
-    let url = NSURL::fileURLWithPath(&NSString::from_str(&bundle.path().to_string_lossy()));
-    NSFileManager::defaultManager()
-        .trashItemAtURL_resultingItemURL_error(&url, None)
-        .map_err(|e| e.localizedDescription().to_string())
+    screenshots::move_to_trash(bundle.path())
 }
 
 #[tauri::command]
@@ -273,6 +293,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             onboarding::relaunch,
             onboarding::complete_onboarding,
             start_recording,
+            take_screenshot,
             stop_recording,
             recording_phase,
             list_unfinished,
@@ -326,12 +347,16 @@ pub fn export_bindings(path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn setup(
+    app: &mut tauri::App,
+    last_run: Option<std::time::SystemTime>,
+) -> Result<(), Box<dyn std::error::Error>> {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     let settings_path = app.path().app_data_dir()?.join(settings::FILE_NAME);
     app.manage(SettingsStore::load(&settings_path));
     let handle = app.handle();
     log::info!("Recast {} started", app.package_info().version);
+    crash::log_reports_since(last_run);
 
     for status in hotkeys::apply(handle) {
         if let Some(error) = status.error {
@@ -368,6 +393,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let last_run = crash::last_log_write(&logging::config().active_file());
+    crash::install_handlers();
     let builder = specta_builder();
     tauri::Builder::default()
         .plugin(logging::config().plugin())
@@ -392,7 +419,7 @@ pub fn run() {
         })
         .setup(move |app| {
             builder.mount_events(app);
-            setup(app)
+            setup(app, last_run)
         })
         .build(tauri::generate_context!())
         .expect("error while building Recast")

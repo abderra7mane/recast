@@ -1,14 +1,18 @@
-use cidre::{cg, cv, sc};
+use cidre::{arc, cg, cv, sc};
 
 use super::{block_on, content, writer::platform};
 use crate::{CaptureTarget, Error, Result, Screenshot};
 
-pub(super) fn screenshot(target: &CaptureTarget) -> Result<Screenshot> {
-    let content = content::shareable_content()?;
-    let source = content::source(&content, target)?;
-    let width = (source.width * source.scale).round().max(1.0) as usize;
-    let height = (source.height * source.scale).round().max(1.0) as usize;
+/// A screenshot configuration with the background color it points to. The
+/// configuration's `backgroundColor` is an `assign` property, so the color has to live
+/// as long as the configuration does; fields drop in order, configuration first.
+struct ShotCfg {
+    cfg: arc::R<sc::StreamCfg>,
+    _background: arc::R<cg::Color>,
+}
 
+fn shot_cfg(width: usize, height: usize, src_rect: Option<cg::Rect>, window: bool) -> ShotCfg {
+    let background = cg::Color::generic_gray(0.0, 0.0);
     let mut cfg = sc::StreamCfg::new();
     cfg.set_width(width);
     cfg.set_height(height);
@@ -16,23 +20,38 @@ pub(super) fn screenshot(target: &CaptureTarget) -> Result<Screenshot> {
     cfg.set_capture_resolution(sc::CaptureResolution::Best);
     cfg.set_pixel_format(cv::PixelFormat::_32_BGRA);
     cfg.set_color_space_name(cg::color_space::names::srgb());
-    if let Some(rect) = source.src_rect {
+    if let Some(rect) = src_rect {
         cfg.set_src_rect(rect);
     }
-    if source.window.is_some() {
+    if window {
         cfg.set_ignore_shadows_single_window(true);
         cfg.set_should_be_opaque(false);
-        cfg.set_background_color(&cg::Color::generic_gray(0.0, 0.0));
+        cfg.set_background_color(&background);
     }
+    ShotCfg {
+        cfg,
+        _background: background,
+    }
+}
 
-    let image =
-        block_on(sc::ScreenshotManager::capture_image(&source.filter, &cfg)).map_err(|e| {
-            if cg::screen_capture_access::preflight() {
-                platform("cannot take the screenshot", &e)
-            } else {
-                Error::PermissionDenied
-            }
-        })?;
+pub(super) fn screenshot(target: &CaptureTarget) -> Result<Screenshot> {
+    let content = content::shareable_content()?;
+    let source = content::source(&content, target)?;
+    let width = (source.width * source.scale).round().max(1.0) as usize;
+    let height = (source.height * source.scale).round().max(1.0) as usize;
+    let shot = shot_cfg(width, height, source.src_rect, source.window.is_some());
+
+    let image = block_on(sc::ScreenshotManager::capture_image(
+        &source.filter,
+        &shot.cfg,
+    ))
+    .map_err(|e| {
+        if cg::screen_capture_access::preflight() {
+            platform("cannot take the screenshot", &e)
+        } else {
+            Error::PermissionDenied
+        }
+    })?;
     let (width, height, rgba) = image_rgba(&image)?;
     Ok(Screenshot {
         width,
@@ -128,6 +147,35 @@ mod tests {
             "{bottom:?}"
         );
         assert!((127..=128).contains(&bottom[3]), "{bottom:?}");
+    }
+
+    /// `SCScreenshotManager` copies the configuration, background color included; a
+    /// color released too early made that copy crash.
+    #[test]
+    fn window_config_keeps_its_background_color_alive() {
+        use objc2::{Encode, Encoding, msg_send, rc::Retained, runtime::AnyObject};
+
+        #[repr(transparent)]
+        struct ColorRef(*const cg::Color);
+        // SAFETY: a CGColorRef is a pointer to the opaque `CGColor` struct.
+        unsafe impl Encode for ColorRef {
+            const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("CGColor", &[]));
+        }
+
+        let shot = shot_cfg(64, 48, None, true);
+        assert!(std::ptr::eq(
+            shot.cfg.background_color(),
+            &*shot._background
+        ));
+        let cfg = &*shot.cfg as *const sc::StreamCfg as *const AnyObject;
+        // SAFETY: `cfg` is a live SCStreamConfiguration, which conforms to NSCopying.
+        let copy: Retained<AnyObject> = unsafe { msg_send![&*cfg, copy] };
+        // SAFETY: `backgroundColor` returns a CGColorRef owned by the copy.
+        let color: ColorRef = unsafe { msg_send![&*copy, backgroundColor] };
+        // SAFETY: the copy holds its color while `copy` is alive.
+        let color = unsafe { &*color.0 };
+        assert_eq!(color.alpha(), 0.0);
+        assert!(shot_cfg(64, 48, None, false).cfg.width() == 64);
     }
 
     #[test]

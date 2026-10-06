@@ -41,10 +41,12 @@ build: install bindings
 bindings:
 	cargo run --quiet -p recast-desktop --example export-bindings
 
-test: test-rust test-ui
+# Runs every suite, even after a failing one, and fails if any failed.
+test:
+	@status=0; $(MAKE) test-rust || status=1; $(MAKE) test-ui || status=1; exit $$status
 
 test-rust:
-	cargo test --workspace --all-targets --all-features
+	cargo test --workspace --all-targets --all-features --no-fail-fast
 
 test-ui: install
 	$(PNPM) test

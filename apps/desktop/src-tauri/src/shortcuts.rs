@@ -3,6 +3,7 @@
 
 use std::{fmt, str::FromStr};
 
+use recast_capture::picker::PickMode;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -11,36 +12,76 @@ use crate::settings::ShortcutSettings;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum ShortcutAction {
-    Record,
+    RecordArea,
+    RecordWindow,
+    RecordDisplay,
     CaptureArea,
     CaptureWindow,
+    CaptureDisplay,
 }
 
 impl ShortcutAction {
-    pub const ALL: [Self; 3] = [Self::Record, Self::CaptureArea, Self::CaptureWindow];
+    pub const ALL: [Self; 6] = [
+        Self::RecordArea,
+        Self::RecordWindow,
+        Self::RecordDisplay,
+        Self::CaptureArea,
+        Self::CaptureWindow,
+        Self::CaptureDisplay,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Record => "Start or stop recording",
+            Self::RecordArea => "Record area",
+            Self::RecordWindow => "Record window",
+            Self::RecordDisplay => "Record display",
             Self::CaptureArea => "Capture area",
             Self::CaptureWindow => "Capture window",
+            Self::CaptureDisplay => "Capture display",
+        }
+    }
+
+    /// Whether the action records; its shortcut also stops a running recording.
+    pub fn records(self) -> bool {
+        matches!(
+            self,
+            Self::RecordArea | Self::RecordWindow | Self::RecordDisplay
+        )
+    }
+
+    pub fn mode(self) -> PickMode {
+        match self {
+            Self::RecordArea | Self::CaptureArea => PickMode::Area,
+            Self::RecordWindow | Self::CaptureWindow => PickMode::Window,
+            Self::RecordDisplay | Self::CaptureDisplay => PickMode::Display,
+        }
+    }
+
+    fn slot(self, settings: &ShortcutSettings) -> &Option<String> {
+        match self {
+            Self::RecordArea => &settings.record_area,
+            Self::RecordWindow => &settings.record_window,
+            Self::RecordDisplay => &settings.record_display,
+            Self::CaptureArea => &settings.capture_area,
+            Self::CaptureWindow => &settings.capture_window,
+            Self::CaptureDisplay => &settings.capture_display,
         }
     }
 
     pub fn get(self, settings: &ShortcutSettings) -> Option<&str> {
-        match self {
-            Self::Record => settings.record.as_deref(),
-            Self::CaptureArea => settings.capture_area.as_deref(),
-            Self::CaptureWindow => settings.capture_window.as_deref(),
-        }
+        self.slot(settings).as_deref()
     }
 
     pub fn set(self, settings: &mut ShortcutSettings, shortcut: Option<String>) {
-        match self {
-            Self::Record => settings.record = shortcut,
-            Self::CaptureArea => settings.capture_area = shortcut,
-            Self::CaptureWindow => settings.capture_window = shortcut,
-        }
+        let slot = match self {
+            Self::RecordArea => &mut settings.record_area,
+            Self::RecordWindow => &mut settings.record_window,
+            Self::RecordDisplay => &mut settings.record_display,
+            Self::CaptureArea => &mut settings.capture_area,
+            Self::CaptureWindow => &mut settings.capture_window,
+            Self::CaptureDisplay => &mut settings.capture_display,
+        };
+        *slot = shortcut;
     }
 }
 
@@ -344,11 +385,7 @@ pub fn check(
 pub fn resolve(
     settings: &ShortcutSettings,
 ) -> Vec<(ShortcutAction, Option<Result<Shortcut, String>>)> {
-    let mut earlier = ShortcutSettings {
-        record: None,
-        capture_area: None,
-        capture_window: None,
-    };
+    let mut earlier = ShortcutSettings::none();
     ShortcutAction::ALL
         .into_iter()
         .map(|action| {
@@ -412,26 +449,69 @@ mod tests {
 
     #[test]
     fn defaults_are_valid() {
+        let mut set = Vec::new();
         for (action, checked) in resolve(&defaults()) {
-            let shortcut = checked.unwrap().unwrap();
+            let Some(checked) = checked else {
+                continue;
+            };
+            let shortcut = checked.unwrap();
             assert_eq!(Some(shortcut.to_string().as_str()), action.get(&defaults()));
+            set.push((action, shortcut.symbols()));
         }
+        assert_eq!(
+            set,
+            [
+                (ShortcutAction::RecordArea, "⌥⇧⌘R".to_string()),
+                (ShortcutAction::CaptureArea, "⌥⇧⌘S".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn every_action_has_its_own_slot_and_mode() {
+        let mut settings = ShortcutSettings::none();
+        for (i, action) in ShortcutAction::ALL.into_iter().enumerate() {
+            action.set(&mut settings, Some(format!("Alt+Cmd+Digit{i}")));
+        }
+        for (i, action) in ShortcutAction::ALL.into_iter().enumerate() {
+            assert_eq!(
+                action.get(&settings),
+                Some(format!("Alt+Cmd+Digit{i}").as_str())
+            );
+        }
+        assert!(
+            resolve(&settings)
+                .iter()
+                .all(|(_, c)| matches!(c, Some(Ok(_))))
+        );
+        let modes: Vec<_> = ShortcutAction::ALL.map(|a| (a.records(), a.mode())).into();
+        assert_eq!(
+            modes,
+            [
+                (true, PickMode::Area),
+                (true, PickMode::Window),
+                (true, PickMode::Display),
+                (false, PickMode::Area),
+                (false, PickMode::Window),
+                (false, PickMode::Display),
+            ]
+        );
     }
 
     #[test]
     fn needs_a_modifier_that_typing_does_not_use() {
-        let err = check(ShortcutAction::Record, "KeyR", &defaults()).unwrap_err();
+        let err = check(ShortcutAction::RecordArea, "KeyR", &defaults()).unwrap_err();
         assert!(err.contains("typing"), "{err}");
-        assert!(check(ShortcutAction::Record, "Shift+KeyR", &defaults()).is_err());
-        assert!(check(ShortcutAction::Record, "F13", &defaults()).is_ok());
-        assert!(check(ShortcutAction::Record, "Ctrl+KeyR", &defaults()).is_ok());
+        assert!(check(ShortcutAction::RecordArea, "Shift+KeyR", &defaults()).is_err());
+        assert!(check(ShortcutAction::RecordArea, "F13", &defaults()).is_ok());
+        assert!(check(ShortcutAction::RecordArea, "Ctrl+KeyR", &defaults()).is_ok());
     }
 
     #[test]
     fn command_alone_belongs_to_app_menus() {
-        let err = check(ShortcutAction::Record, "Cmd+KeyR", &defaults()).unwrap_err();
+        let err = check(ShortcutAction::RecordArea, "Cmd+KeyR", &defaults()).unwrap_err();
         assert!(err.contains("⌘R"), "{err}");
-        assert!(check(ShortcutAction::Record, "Cmd+F6", &defaults()).is_ok());
+        assert!(check(ShortcutAction::RecordArea, "Cmd+F6", &defaults()).is_ok());
     }
 
     #[test]
@@ -441,7 +521,7 @@ mod tests {
             err,
             "⇧⌘4 is already used by the macOS screenshot of an area."
         );
-        let err = check(ShortcutAction::Record, "Ctrl+Cmd+Space", &defaults()).unwrap_err();
+        let err = check(ShortcutAction::RecordWindow, "Ctrl+Cmd+Space", &defaults()).unwrap_err();
         assert!(err.contains("Emoji"), "{err}");
     }
 
@@ -453,38 +533,52 @@ mod tests {
             &defaults(),
         )
         .unwrap_err();
-        assert_eq!(err, "⌥⇧⌘R is already used for Start or stop recording.");
+        assert_eq!(err, "⌥⇧⌘R is already used for Record area.");
         assert!(
-            check(ShortcutAction::Record, "Shift+Alt+Cmd+KeyR", &defaults()).is_ok(),
+            check(
+                ShortcutAction::RecordArea,
+                "Shift+Alt+Cmd+KeyR",
+                &defaults()
+            )
+            .is_ok(),
             "an action may keep its own shortcut"
         );
+        let err = check(
+            ShortcutAction::RecordDisplay,
+            "Alt+Shift+Cmd+KeyS",
+            &defaults(),
+        )
+        .unwrap_err();
+        assert_eq!(err, "⌥⇧⌘S is already used for Capture area.");
         let mut settings = defaults();
-        settings.record = None;
+        settings.record_area = None;
         assert!(check(ShortcutAction::CaptureArea, "Alt+Shift+Cmd+KeyR", &settings).is_ok());
     }
 
     #[test]
     fn resolve_reports_bad_and_duplicate_entries() {
         let settings = ShortcutSettings {
-            record: Some("Alt+Cmd+KeyK".into()),
+            record_area: Some("Alt+Cmd+KeyK".into()),
             capture_area: Some("Cmd+Alt+KeyK".into()),
             capture_window: Some("nonsense".into()),
+            ..ShortcutSettings::none()
         };
         let resolved = resolve(&settings);
         assert!(resolved[0].1.as_ref().unwrap().is_ok());
+        assert!(resolved[1].1.is_none());
         assert!(
-            resolved[1]
+            resolved[3]
                 .1
                 .as_ref()
                 .unwrap()
                 .as_ref()
                 .unwrap_err()
-                .contains("Start or stop recording")
+                .contains("Record area")
         );
-        assert!(resolved[2].1.as_ref().unwrap().is_err());
+        assert!(resolved[4].1.as_ref().unwrap().is_err());
 
         let off = ShortcutSettings {
-            record: None,
+            record_area: None,
             ..defaults()
         };
         assert!(resolve(&off)[0].1.is_none());

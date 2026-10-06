@@ -18,7 +18,7 @@ define_class!(
     #[unsafe(super(NSPanel, NSWindow, NSResponder, NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "RecastKeyPanel"]
-    /// A panel that can become key without a title bar, so it receives Esc and Space.
+    /// A panel that can become key without a title bar, so it receives Esc.
     pub struct KeyPanel;
 
     impl KeyPanel {

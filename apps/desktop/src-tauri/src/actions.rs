@@ -23,20 +23,21 @@ fn can_capture(app: &AppHandle) -> bool {
     false
 }
 
+/// Runs a shortcut's or menu item's action. Any record action stops a running recording.
 pub fn run(app: &AppHandle, action: ShortcutAction) {
-    match action {
-        ShortcutAction::Record => toggle_recording(app),
-        ShortcutAction::CaptureArea => screenshot(app, PickMode::Area),
-        ShortcutAction::CaptureWindow => screenshot(app, PickMode::Window),
+    if action.records() {
+        toggle_recording(app, action.mode());
+    } else {
+        screenshot(app, action.mode());
     }
 }
 
-pub fn toggle_recording(app: &AppHandle) {
+pub fn toggle_recording(app: &AppHandle, mode: PickMode) {
     let idle = matches!(app.state::<Flow>().phase(), Phase::Idle);
     if idle && !can_capture(app) {
         return;
     }
-    tauri::async_runtime::spawn(recording_ui::toggle(app.clone()));
+    tauri::async_runtime::spawn(recording_ui::toggle(app.clone(), mode));
 }
 
 pub fn stop_recording(app: &AppHandle) {

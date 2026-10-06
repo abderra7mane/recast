@@ -18,6 +18,7 @@ pub struct ScreenshotSettings {
     pub save_to_disk: bool,
     /// Where captures are saved; `None` means `~/Pictures/Recast`.
     pub folder: Option<String>,
+    pub play_shutter_sound: bool,
 }
 
 impl Default for ScreenshotSettings {
@@ -26,6 +27,7 @@ impl Default for ScreenshotSettings {
             copy_to_clipboard: true,
             save_to_disk: true,
             folder: None,
+            play_shutter_sound: true,
         }
     }
 }
@@ -76,19 +78,70 @@ fn folder_or(folder: &Option<String>, default: impl FnOnce() -> PathBuf) -> Path
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ShortcutSettings {
-    pub record: Option<String>,
+    pub record_area: Option<String>,
+    pub record_window: Option<String>,
+    pub record_display: Option<String>,
     pub capture_area: Option<String>,
     pub capture_window: Option<String>,
+    pub capture_display: Option<String>,
 }
 
 impl Default for ShortcutSettings {
     fn default() -> Self {
         Self {
-            record: Some("Alt+Shift+Cmd+KeyR".into()),
+            record_area: Some("Alt+Shift+Cmd+KeyR".into()),
             capture_area: Some("Alt+Shift+Cmd+KeyS".into()),
-            capture_window: Some("Alt+Shift+Cmd+KeyW".into()),
+            ..Self::none()
         }
     }
+}
+
+impl ShortcutSettings {
+    /// Every shortcut turned off.
+    pub fn none() -> Self {
+        Self {
+            record_area: None,
+            record_window: None,
+            record_display: None,
+            capture_area: None,
+            capture_window: None,
+            capture_display: None,
+        }
+    }
+}
+
+/// The settings format; files without a version are older.
+pub const VERSION: u32 = 1;
+/// Capture Window's default shortcut before version 1.
+const OLD_CAPTURE_WINDOW_DEFAULT: &str = "Alt+Shift+Cmd+KeyW";
+
+/// Brings settings JSON from before version 1 up to date:
+/// - the single "record" shortcut, which started with window picking and allowed a drag
+///   for an area, becomes Record Area's;
+/// - Capture Window no longer has a default shortcut, so the old default is dropped,
+///   while a shortcut the user picked stays.
+fn migrate(mut json: serde_json::Value) -> serde_json::Value {
+    let Some(settings) = json.as_object_mut() else {
+        return json;
+    };
+    if settings.contains_key("version") {
+        return json;
+    }
+    if let Some(shortcuts) = settings
+        .get_mut("shortcuts")
+        .and_then(|s| s.as_object_mut())
+    {
+        if let Some(record) = shortcuts.remove("record") {
+            shortcuts.entry("recordArea").or_insert(record);
+        }
+        if shortcuts.get("captureWindow").and_then(|s| s.as_str())
+            == Some(OLD_CAPTURE_WINDOW_DEFAULT)
+        {
+            shortcuts.insert("captureWindow".into(), serde_json::Value::Null);
+        }
+    }
+    settings.insert("version".into(), VERSION.into());
+    json
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -105,9 +158,10 @@ impl Default for UpdateSettings {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppSettings {
+    pub version: u32,
     pub screenshots: ScreenshotSettings,
     /// The last background used to beautify a screenshot.
     pub beautify: BackgroundSettings,
@@ -115,6 +169,20 @@ pub struct AppSettings {
     pub shortcuts: ShortcutSettings,
     pub updates: UpdateSettings,
     pub onboarding_completed: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            version: VERSION,
+            screenshots: ScreenshotSettings::default(),
+            beautify: BackgroundSettings::default(),
+            recording: RecordingSettings::default(),
+            shortcuts: ShortcutSettings::default(),
+            updates: UpdateSettings::default(),
+            onboarding_completed: false,
+        }
+    }
 }
 
 pub struct SettingsStore {
@@ -126,10 +194,12 @@ impl SettingsStore {
     /// Reads the settings at `path`; a missing or unreadable file gives the defaults.
     pub fn load(path: &Path) -> Self {
         let current = match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                log::warn!("ignoring unreadable {}: {e}", path.display());
-                AppSettings::default()
-            }),
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .and_then(|json| serde_json::from_value(migrate(json)))
+                .unwrap_or_else(|e| {
+                    log::warn!("ignoring unreadable {}: {e}", path.display());
+                    AppSettings::default()
+                }),
             Err(_) => AppSettings::default(),
         };
         Self {
@@ -181,6 +251,7 @@ mod tests {
         let settings = store.get();
         assert!(settings.screenshots.copy_to_clipboard);
         assert!(settings.screenshots.save_to_disk);
+        assert!(settings.screenshots.play_shutter_sound);
         assert_eq!(settings.beautify, BackgroundSettings::default());
     }
 
@@ -267,7 +338,117 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["screenshots"]["copyToClipboard"], false);
         assert_eq!(saved["beautify"]["padding"], 0.2);
-        assert_eq!(saved["shortcuts"]["record"], "Alt+Shift+Cmd+KeyR");
+        assert_eq!(saved["shortcuts"]["recordArea"], "Alt+Shift+Cmd+KeyR");
+        assert_eq!(saved["version"], VERSION);
+    }
+
+    #[test]
+    fn the_shutter_sound_is_on_for_older_settings_and_can_be_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"screenshots":{"copyToClipboard":false,"saveToDisk":true,"folder":null},"onboardingCompleted":true}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(&path);
+        let settings = store.get();
+        assert!(settings.screenshots.play_shutter_sound);
+        assert!(!settings.screenshots.copy_to_clipboard);
+        assert!(settings.onboarding_completed);
+
+        store
+            .update(|s| s.screenshots.play_shutter_sound = false)
+            .unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["screenshots"]["playShutterSound"], false);
+        assert!(
+            !SettingsStore::load(&path)
+                .get()
+                .screenshots
+                .play_shutter_sound
+        );
+    }
+
+    #[test]
+    fn only_the_area_actions_have_default_shortcuts() {
+        let shortcuts = AppSettings::default().shortcuts;
+        assert_eq!(shortcuts.record_area.as_deref(), Some("Alt+Shift+Cmd+KeyR"));
+        assert_eq!(
+            shortcuts.capture_area.as_deref(),
+            Some("Alt+Shift+Cmd+KeyS")
+        );
+        assert_eq!(
+            ShortcutSettings {
+                record_area: None,
+                capture_area: None,
+                ..shortcuts
+            },
+            ShortcutSettings::none()
+        );
+    }
+
+    #[test]
+    fn the_old_capture_window_default_is_dropped_on_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"shortcuts":{"record":"Alt+Shift+Cmd+KeyR","captureArea":"Alt+Shift+Cmd+KeyS","captureWindow":"Alt+Shift+Cmd+KeyW"}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(&path);
+        let settings = store.get();
+        assert_eq!(settings.version, VERSION);
+        assert_eq!(
+            settings.shortcuts,
+            ShortcutSettings::default(),
+            "the old record shortcut becomes Record Area"
+        );
+
+        store
+            .update(|s| s.shortcuts.capture_window = Some("Alt+Shift+Cmd+KeyW".into()))
+            .unwrap();
+        let reloaded = SettingsStore::load(&path).get();
+        assert_eq!(
+            reloaded.shortcuts.capture_window.as_deref(),
+            Some("Alt+Shift+Cmd+KeyW"),
+            "set again after the upgrade, it stays"
+        );
+    }
+
+    #[test]
+    fn shortcuts_the_user_chose_survive_the_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"shortcuts":{"record":"Ctrl+Alt+KeyR","captureArea":null,"captureWindow":"Ctrl+Alt+KeyW"}}"#,
+        )
+        .unwrap();
+        let shortcuts = SettingsStore::load(&path).get().shortcuts;
+        assert_eq!(shortcuts.record_area.as_deref(), Some("Ctrl+Alt+KeyR"));
+        assert_eq!(shortcuts.capture_area, None);
+        assert_eq!(shortcuts.capture_window.as_deref(), Some("Ctrl+Alt+KeyW"));
+        assert_eq!(shortcuts.record_window, None);
+        assert_eq!(shortcuts.record_display, None);
+        assert_eq!(shortcuts.capture_display, None);
+
+        std::fs::write(
+            &path,
+            r#"{"version":1,"shortcuts":{"captureWindow":"Alt+Shift+Cmd+KeyW"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            SettingsStore::load(&path)
+                .get()
+                .shortcuts
+                .capture_window
+                .as_deref(),
+            Some("Alt+Shift+Cmd+KeyW"),
+            "current files are left alone"
+        );
     }
 
     #[test]
@@ -277,7 +458,10 @@ mod tests {
         std::fs::write(&path, r#"{"shortcuts":{"captureArea":null}}"#).unwrap();
         let shortcuts = SettingsStore::load(&path).get().shortcuts;
         assert_eq!(shortcuts.capture_area, None);
-        assert_eq!(shortcuts.record, ShortcutSettings::default().record);
+        assert_eq!(
+            shortcuts.record_area,
+            ShortcutSettings::default().record_area
+        );
     }
 
     #[test]

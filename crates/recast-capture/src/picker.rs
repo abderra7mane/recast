@@ -138,11 +138,11 @@ pub fn size_label(width: f64, height: f64) -> String {
     format!("{} × {}", width.round(), height.round())
 }
 
-/// What the picker highlights first; Space switches to and from [`PickMode::Display`].
+/// What the picker picks. Each mode picks one kind of target only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum PickMode {
-    /// Nothing is highlighted until a drag selects a region.
+    /// A drag selects a region; clicks do nothing.
     Area,
     /// The window under the pointer is highlighted; a click picks it.
     Window,
@@ -169,6 +169,27 @@ pub enum Highlight {
     Display { bounds: Rect, label: String },
 }
 
+/// The pointer the picker shows on every display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerCursor {
+    /// Window and display modes: a click picks what is under it.
+    Camera,
+    /// Area mode: a drag selects an area; a label next to it shows where it is or the
+    /// selection size.
+    Crosshair,
+}
+
+/// The text next to the crosshair: the pointer's position before a drag, the selection
+/// size during one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointerLabel {
+    /// Index of the display it shows on.
+    pub display: usize,
+    /// The pointer in points relative to that display's top-left corner.
+    pub at: Point,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
     Pending,
@@ -187,7 +208,6 @@ struct Drag {
 pub struct Picker {
     displays: Vec<PickerDisplay>,
     windows: Vec<PickerWindow>,
-    start_mode: PickMode,
     mode: PickMode,
     pointer: Option<Point>,
     drag: Option<Drag>,
@@ -227,7 +247,6 @@ impl Picker {
                 .into_iter()
                 .filter(|w| pickable(w, own_pid))
                 .collect(),
-            start_mode: mode,
             mode,
             pointer: None,
             drag: None,
@@ -246,12 +265,56 @@ impl Picker {
         self.drag.is_some_and(|d| d.moved)
     }
 
+    /// Index of the display under `p`.
+    pub fn display_index_at(&self, p: Point) -> Option<usize> {
+        self.displays.iter().position(|d| contains(&d.bounds, p))
+    }
+
+    /// The same on every display, by mode.
+    pub fn cursor(&self) -> PickerCursor {
+        match self.mode {
+            PickMode::Area => PickerCursor::Crosshair,
+            PickMode::Window | PickMode::Display => PickerCursor::Camera,
+        }
+    }
+
+    pub fn pointer_label(&self) -> Option<PointerLabel> {
+        if self.cursor() != PickerCursor::Crosshair {
+            return None;
+        }
+        let p = self.pointer?;
+        if let Some(drag) = self.drag.filter(|d| d.moved) {
+            let display = &self.displays[drag.display];
+            let d = &display.bounds;
+            let rect = region_between(display, drag.start, drag.current);
+            return Some(PointerLabel {
+                display: drag.display,
+                at: Point::new(
+                    (p.x - d.x).clamp(0.0, d.width),
+                    (p.y - d.y).clamp(0.0, d.height),
+                ),
+                text: size_label(rect.width, rect.height),
+            });
+        }
+        let index = self.display_index_at(p)?;
+        let d = &self.displays[index].bounds;
+        let at = Point::new(p.x - d.x, p.y - d.y);
+        Some(PointerLabel {
+            display: index,
+            at,
+            text: format!("{}, {}", at.x.floor(), at.y.floor()),
+        })
+    }
+
     pub fn move_to(&mut self, p: Point) {
         self.pointer = Some(p);
     }
 
     pub fn press(&mut self, p: Point) {
         self.pointer = Some(p);
+        if self.mode != PickMode::Area {
+            return;
+        }
         self.drag = self
             .displays
             .iter()
@@ -279,14 +342,6 @@ impl Picker {
             Some(drag) if drag.moved => self.region(&drag),
             _ => self.click(p),
         }
-    }
-
-    pub fn toggle_display_mode(&mut self) {
-        self.mode = match (self.mode, self.start_mode) {
-            (PickMode::Display, PickMode::Display) => PickMode::Window,
-            (PickMode::Display, start) => start,
-            _ => PickMode::Display,
-        };
     }
 
     fn region(&self, drag: &Drag) -> Outcome {
@@ -603,7 +658,7 @@ mod tests {
 
     #[test]
     fn region_on_a_second_display_is_relative_to_it() {
-        let mut picker = Picker::new(PickMode::Window, displays(), windows(), OWN_PID);
+        let mut picker = Picker::new(PickMode::Area, displays(), windows(), OWN_PID);
         picker.press(Point::new(1612.0, 50.0));
         let Outcome::Picked(picked) = picker.release(Point::new(1812.0, 150.0)) else {
             panic!("expected a region");
@@ -619,13 +674,43 @@ mod tests {
     }
 
     #[test]
-    fn space_switches_to_display_mode_and_back() {
+    fn area_mode_only_drags() {
         let mut picker = Picker::new(PickMode::Area, displays(), windows(), OWN_PID);
-        picker.press(Point::new(10.0, 500.0));
-        assert_eq!(picker.release(Point::new(10.0, 500.0)), Outcome::Pending);
+        picker.move_to(Point::new(300.0, 200.0));
+        assert_eq!(picker.highlight(), Highlight::None, "no window highlight");
+        picker.press(Point::new(300.0, 200.0));
+        assert_eq!(
+            picker.release(Point::new(300.0, 200.0)),
+            Outcome::Pending,
+            "a click over a window picks nothing"
+        );
+        assert_eq!(picker.mode(), PickMode::Area);
+    }
 
-        picker.toggle_display_mode();
-        assert_eq!(picker.mode(), PickMode::Display);
+    #[test]
+    fn window_mode_only_picks_windows() {
+        let mut picker = Picker::new(PickMode::Window, displays(), windows(), OWN_PID);
+        picker.move_to(Point::new(1300.0, 950.0));
+        assert_eq!(picker.highlight(), Highlight::None, "desktop");
+        picker.press(Point::new(1300.0, 950.0));
+        assert_eq!(picker.release(Point::new(1300.0, 950.0)), Outcome::Pending);
+
+        picker.press(Point::new(250.0, 200.0));
+        picker.drag_to(Point::new(450.0, 300.0));
+        assert!(!picker.is_dragging());
+        assert!(
+            !matches!(picker.highlight(), Highlight::Region { .. }),
+            "no selection"
+        );
+        let Outcome::Picked(picked) = picker.release(Point::new(450.0, 300.0)) else {
+            panic!("the window under the pointer");
+        };
+        assert_eq!(picked.target, CaptureTarget::Window { window_id: 12 });
+    }
+
+    #[test]
+    fn display_mode_only_picks_displays() {
+        let mut picker = Picker::new(PickMode::Display, displays(), windows(), OWN_PID);
         picker.move_to(Point::new(2000.0, 500.0));
         assert_eq!(
             picker.highlight(),
@@ -634,18 +719,94 @@ mod tests {
                 label: "External  1920 × 1080".into()
             }
         );
+        picker.move_to(Point::new(300.0, 200.0));
+        assert_eq!(
+            picker.highlight(),
+            Highlight::Display {
+                bounds: rect(0.0, 0.0, 1512.0, 982.0),
+                label: "Built-in  1512 × 982".into()
+            },
+            "follows the pointer, ignoring windows"
+        );
         picker.press(Point::new(2000.0, 500.0));
-        let Outcome::Picked(picked) = picker.release(Point::new(2000.0, 500.0)) else {
+        picker.drag_to(Point::new(2200.0, 600.0));
+        let Outcome::Picked(picked) = picker.release(Point::new(2200.0, 600.0)) else {
             panic!("expected the display");
         };
         assert_eq!(picked.target, CaptureTarget::Display { display_id: 2 });
+        assert_eq!(picked.display_id, 2);
 
-        picker.toggle_display_mode();
-        assert_eq!(picker.mode(), PickMode::Area);
+        picker.press(Point::new(100.0, 1000.0));
+        assert_eq!(
+            picker.release(Point::new(100.0, 1000.0)),
+            Outcome::Pending,
+            "between displays"
+        );
+    }
 
-        let mut picker = Picker::new(PickMode::Display, displays(), windows(), OWN_PID);
-        picker.toggle_display_mode();
-        assert_eq!(picker.mode(), PickMode::Window);
+    #[test]
+    fn each_mode_keeps_its_cursor_on_every_display() {
+        for (mode, expected) in [
+            (PickMode::Area, PickerCursor::Crosshair),
+            (PickMode::Window, PickerCursor::Camera),
+            (PickMode::Display, PickerCursor::Camera),
+        ] {
+            let mut picker = Picker::new(mode, displays(), windows(), OWN_PID);
+            for p in [Point::new(300.0, 200.0), Point::new(2000.0, 500.0)] {
+                picker.move_to(p);
+                assert_eq!(picker.cursor(), expected, "{mode:?} {p:?}");
+                picker.press(p);
+                picker.drag_to(Point::new(p.x + 100.0, p.y + 60.0));
+                assert_eq!(picker.cursor(), expected, "{mode:?} while dragging");
+                picker.release(Point::new(p.x + 100.0, p.y + 60.0));
+            }
+            if mode != PickMode::Area {
+                assert_eq!(picker.pointer_label(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn the_label_shows_display_coordinates_then_the_selection_size() {
+        let mut picker = Picker::new(PickMode::Area, displays(), windows(), OWN_PID);
+        assert_eq!(picker.pointer_label(), None, "pointer unknown");
+        picker.move_to(Point::new(100.6, 50.2));
+        assert_eq!(
+            picker.pointer_label(),
+            Some(PointerLabel {
+                display: 0,
+                at: Point::new(100.6, 50.2),
+                text: "100, 50".into()
+            })
+        );
+        picker.move_to(Point::new(1612.0, 40.0));
+        let label = picker.pointer_label().unwrap();
+        assert_eq!((label.display, label.text.as_str()), (1, "100, 40"));
+
+        picker.press(Point::new(1612.0, 40.0));
+        picker.drag_to(Point::new(1712.0, 90.0));
+        let label = picker.pointer_label().unwrap();
+        assert_eq!(label.display, 1);
+        assert_eq!(label.at, Point::new(200.0, 90.0));
+        assert_eq!(label.text, "100 × 50");
+
+        picker.drag_to(Point::new(1000.0, 90.0));
+        let label = picker.pointer_label().unwrap();
+        assert_eq!(label.display, 1, "stays on the display the drag started on");
+        assert_eq!(label.at, Point::new(0.0, 90.0));
+        assert_eq!(label.text, "100 × 50");
+
+        picker.move_to(Point::new(100.0, 1000.0));
+        picker.release(Point::new(100.0, 1000.0));
+        assert_eq!(picker.pointer_label(), None, "between displays");
+    }
+
+    #[test]
+    fn displays_are_found_by_index() {
+        let picker = Picker::new(PickMode::Area, displays(), windows(), OWN_PID);
+        assert_eq!(picker.display_index_at(Point::new(10.0, 10.0)), Some(0));
+        assert_eq!(picker.display_index_at(Point::new(1600.0, 1000.0)), Some(1));
+        assert_eq!(picker.display_index_at(Point::new(100.0, 1000.0)), None);
     }
 
     #[test]
