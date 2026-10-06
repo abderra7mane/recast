@@ -85,6 +85,37 @@ function SelectField<T extends string>({
   onChange: (value: T) => void;
   children?: ReactNode;
 }) {
+  const stacked = children !== undefined;
+  const select = (
+    <Select value={value} onValueChange={(v) => onChange(v as T)}>
+      <SelectTrigger
+        size="sm"
+        className={stacked ? "min-w-0 flex-1" : "w-36"}
+        aria-label={label}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent position="popper">
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+  if (stacked) {
+    return (
+      <div data-slot="field" className="space-y-1.5">
+        <Label className="text-sm font-normal">{label}</Label>
+        <div data-slot="field-row" className="flex items-center gap-1">
+          {select}
+          {children}
+        </div>
+        <Hint>{hint}</Hint>
+      </div>
+    );
+  }
   return (
     <div data-slot="field" className="space-y-1">
       <div
@@ -92,21 +123,7 @@ function SelectField<T extends string>({
         className="flex items-center justify-between gap-3"
       >
         <Label className="text-sm font-normal">{label}</Label>
-        <div className="flex shrink-0 items-center gap-1">
-          {children}
-          <Select value={value} onValueChange={(v) => onChange(v as T)}>
-            <SelectTrigger size="sm" className="w-36" aria-label={label}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              {options.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {select}
       </div>
       <Hint>{hint}</Hint>
     </div>
