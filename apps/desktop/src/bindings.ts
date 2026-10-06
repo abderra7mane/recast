@@ -56,15 +56,22 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	openLogsFolder: () => __TAURI_INVOKE<void>("open_logs_folder"),
 	copyDiagnostics: () => typedError<null, string>(__TAURI_INVOKE("copy_diagnostics")),
-	beautifyOpen: () => typedError<BeautifyInit, string>(__TAURI_INVOKE("beautify_open")),
-	/**  The beautified screenshot scaled to fit `max_width × max_height` pixels, as a PNG data URL. */
-	beautifyPreview: (background: BackgroundSettings, maxWidth: number, maxHeight: number) => typedError<string, string>(__TAURI_INVOKE("beautify_preview", { background, maxWidth, maxHeight })),
-	beautifyCopy: (background: BackgroundSettings) => typedError<null, string>(__TAURI_INVOKE("beautify_copy", { background })),
+	markupOpen: () => typedError<MarkupInit, string>(__TAURI_INVOKE("markup_open")),
 	/**
-	 *  Saves to `path`, or under a new name in the screenshots folder when there is none.
-	 *  Returns the saved file.
+	 *  The Beautify frame around a `width × height` image, without the image, scaled to fit
+	 *  `max_width × max_height` pixels.
 	 */
-	beautifySave: (background: BackgroundSettings, path: string | null) => typedError<string, string>(__TAURI_INVOKE("beautify_save", { background, path })),
+	markupFrame: (background: BackgroundSettings, width: number, height: number, maxWidth: number, maxHeight: number) => typedError<MarkupFrame, string>(__TAURI_INVOKE("markup_frame", { background, width, height, maxWidth, maxHeight })),
+	/**
+	 *  Finishes the image staged with `staged`, or the original screenshot when it is `None`,
+	 *  with Beautify when `background` is given. Returns the file written, if any.
+	 */
+	markupFinish: (action: MarkupAction, staged: number | null, background: {
+	fill?: BackgroundFill,
+	padding?: number | null,
+	cornerRadius?: number | null,
+	shadow?: Shadow,
+} | null) => typedError<string | null, string>(__TAURI_INVOKE("markup_finish", { action, staged, background })),
 	listProjects: () => typedError<ProjectSummary[], string>(__TAURI_INVOKE("list_projects")),
 	openEditor: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_editor", { path })),
 	/**  Starts the session of the calling editor window (or returns the running one). */
@@ -109,7 +116,7 @@ export type AppInfo = {
 export type AppSettings = {
 	version?: number,
 	screenshots?: ScreenshotSettings,
-	/**  The last background used to beautify a screenshot. */
+	/**  The last Beautify background used in the markup editor. */
 	beautify?: BackgroundSettings,
 	recording?: RecordingSettings,
 	shortcuts?: ShortcutSettings,
@@ -144,16 +151,6 @@ export type BackgroundSettings = {
 	padding?: number | null,
 	cornerRadius?: number | null,
 	shadow?: Shadow,
-};
-
-export type BeautifyInit = {
-	name: string,
-	width: number,
-	height: number,
-	scaleFactor: number | null,
-	/**  The background used last time. */
-	background: BackgroundSettings,
-	savedPath: string | null,
 };
 
 export type CaptureSource = { kind: "display"; displayId: number } | { kind: "window"; windowId: number; title: string | null; appName: string | null } | { kind: "region"; displayId: number; rect: Rect };
@@ -255,6 +252,26 @@ export type FrameRate = "30" | "60";
 export type LoginItem = "enabled" | "disabled" | 
 /**  The user has to allow it in System Settings → General → Login Items. */
 "needsApproval";
+
+export type MarkupAction = { kind: "copy" } | { kind: "saveAs"; path: string } | 
+/**  Writes over the screenshot's file and closes the window. */
+{ kind: "done" };
+
+export type MarkupFrame = {
+	/**  PNG data URL. */
+	url: string,
+	width: number,
+	height: number,
+};
+
+export type MarkupInit = {
+	name: string,
+	width: number,
+	height: number,
+	scaleFactor: number | null,
+	/**  The Beautify background used last time. */
+	background: BackgroundSettings,
+};
 
 export type MouseButton = "left" | "right" | "other";
 

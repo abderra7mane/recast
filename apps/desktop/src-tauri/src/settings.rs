@@ -179,7 +179,7 @@ impl Default for UpdateSettings {
 pub struct AppSettings {
     pub version: u32,
     pub screenshots: ScreenshotSettings,
-    /// The last background used to beautify a screenshot.
+    /// The last Beautify background used in the markup editor.
     pub beautify: BackgroundSettings,
     pub recording: RecordingSettings,
     pub shortcuts: ShortcutSettings,

@@ -25,6 +25,7 @@ import {
 import { editorStore, redo, undo, useEditor } from "@/editor/store";
 import { createSequence, createSettingsSync } from "@/editor/sync";
 import { Timeline } from "@/editor/Timeline";
+import { isTyping } from "@/editor/keys";
 import { Tip } from "@/editor/Tip";
 
 /** Sends edits to the backend; returns a function that waits until all are applied. */
@@ -58,16 +59,6 @@ function useSettingsSync() {
     };
   }, []);
   return flush;
-}
-
-function isTyping(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable || target instanceof HTMLTextAreaElement)
-    return true;
-  return (
-    target instanceof HTMLInputElement &&
-    !["checkbox", "radio", "range", "color", "button"].includes(target.type)
-  );
 }
 
 function useShortcuts(durationMs: number) {

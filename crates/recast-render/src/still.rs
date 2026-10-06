@@ -33,6 +33,8 @@ pub struct StillRenderer {
     compositor: Option<Compositor>,
     scene: Option<Scene>,
     background_path: Option<String>,
+    /// Changes with the image, so the compositor uploads a new one.
+    generation: u64,
 }
 
 impl StillRenderer {
@@ -43,7 +45,16 @@ impl StillRenderer {
             compositor: None,
             scene: None,
             background_path: None,
+            generation: 0,
         }
+    }
+
+    /// Replaces the image, keeping the GPU device.
+    pub fn set_image(&mut self, width: u32, height: u32, rgba: Vec<u8>) {
+        self.image = Rgba::from_straight(width, height, rgba);
+        self.scene = None;
+        self.background_path = None;
+        self.generation += 1;
     }
 
     pub fn image_size(&self) -> (u32, u32) {
@@ -115,7 +126,7 @@ impl StillRenderer {
             bytes_per_row: self.image.width as usize * 4,
             format: PixelFormat::Rgba8,
             data: &self.image.pixels,
-            id: Some(0),
+            id: Some(self.generation),
             has_alpha: true,
         };
         compositor.render(scene, &frame, 0.0)?;

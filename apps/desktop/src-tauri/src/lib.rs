@@ -35,7 +35,7 @@ use recast_input::{Permission, PermissionState, Permissions};
 use recast_project::UnfinishedBundle;
 use recording::FinishedRecording;
 use recording_ui::{RecorderUi, RecordingChanged};
-use screenshots::beautify::{self, Beautifiers};
+use screenshots::markup::{self, Markups};
 use serde::{Deserialize, Serialize};
 use settings::{AppSettings, RecordingSettings, ScreenshotSettings, SettingsStore, UpdateSettings};
 use shortcuts::ShortcutAction;
@@ -316,10 +316,9 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             app_info,
             open_logs_folder,
             copy_diagnostics,
-            beautify::beautify_open,
-            beautify::beautify_preview,
-            beautify::beautify_copy,
-            beautify::beautify_save,
+            markup::markup_open,
+            markup::markup_frame,
+            markup::markup_finish,
             editor_commands::list_projects,
             editor_commands::open_editor,
             editor_commands::editor_open,
@@ -377,6 +376,15 @@ fn setup(
         }
     }
 
+    // Development: opens the markup editor on a PNG without taking a screenshot.
+    #[cfg(feature = "synthetic")]
+    if let Some(path) = std::env::var_os("RECAST_MARKUP_PNG") {
+        match screenshots::Capture::open(Path::new(&path), 2.0) {
+            Ok(capture) => screenshots::edit(handle, std::sync::Arc::new(capture)),
+            Err(e) => log::warn!("cannot open {}: {e}", Path::new(&path).display()),
+        }
+    }
+
     let settings = handle.state::<SettingsStore>().get();
     if !settings.onboarding_completed {
         windows::show_or_log(handle, windows::ONBOARDING);
@@ -403,13 +411,13 @@ pub fn run() {
         .plugin(hotkeys::plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Editors::default())
-        .manage(Beautifiers::default())
+        .manage(Markups::default())
         .manage(Flow::default())
         .manage(RecorderUi::default())
         .manage(activation::Tracker::default())
         .manage(hotkeys::Hotkeys::default())
         .manage(tray::TrayState::default())
-        .invoke_handler(builder.invoke_handler())
+        .invoke_handler(markup::with_raw_commands(builder.invoke_handler()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 activation::window_destroyed(window.app_handle(), window.label());

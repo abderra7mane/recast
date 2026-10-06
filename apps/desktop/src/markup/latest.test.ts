@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createLatestRunner, previewSize } from "@/beautify/latest";
+import { createLatestRunner } from "@/markup/latest";
 
 function deferred() {
   let resolve!: () => void;
@@ -44,12 +44,5 @@ describe("createLatestRunner", () => {
     runner.push(2);
     await new Promise((r) => setTimeout(r, 0));
     expect(runs).toEqual([1, 2]);
-  });
-});
-
-describe("previewSize", () => {
-  it("scales CSS pixels to device pixels", () => {
-    expect(previewSize(800, 500.4, 2)).toEqual({ width: 1600, height: 1001 });
-    expect(previewSize(0, 3, 1)).toEqual({ width: 16, height: 16 });
   });
 });

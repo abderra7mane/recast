@@ -528,6 +528,36 @@ fn beautify_at_native_size_is_pixel_exact_with_padding() {
     }
 }
 
+#[test]
+fn a_replaced_image_of_the_same_size_is_rendered() {
+    let (width, height) = (64, 48);
+    let background = BackgroundSettings {
+        padding: 0.0,
+        corner_radius: 0.0,
+        ..Default::default()
+    };
+    let mut renderer = StillRenderer::new(width, height, vec![0; (width * height * 4) as usize]);
+    let transparent = renderer.render(&background, width, height).unwrap();
+
+    let source = checkerboard(width, height);
+    renderer.set_image(width, height, source.clone());
+    let pixels = renderer.render(&background, width, height).unwrap();
+    assert_ne!(pixels, transparent);
+    let off = pixels
+        .chunks_exact(4)
+        .zip(source.chunks_exact(4))
+        .filter(|(out, src)| out[0].abs_diff(src[0]) > 1)
+        .count();
+    assert_eq!(off, 0);
+
+    renderer.set_image(32, 16, checkerboard(32, 16));
+    assert_eq!(renderer.image_size(), (32, 16));
+    assert_eq!(
+        renderer.render(&background, 32, 16).unwrap().len(),
+        32 * 16 * 4
+    );
+}
+
 /// Black-on-white strokes one to three pixels wide, like small text.
 fn strokes(width: u32, height: u32) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);

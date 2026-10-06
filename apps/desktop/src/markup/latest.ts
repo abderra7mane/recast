@@ -27,11 +27,3 @@ export function createLatestRunner<T>(run: (value: T) => Promise<unknown>) {
     },
   };
 }
-
-/** The preview's size in device pixels for an area of `width × height` CSS pixels. */
-export function previewSize(width: number, height: number, pixelRatio: number) {
-  return {
-    width: Math.max(16, Math.round(width * pixelRatio)),
-    height: Math.max(16, Math.round(height * pixelRatio)),
-  };
-}

@@ -19,7 +19,7 @@ const DEFAULT_FILLS: Record<Fill["kind"], Fill> = {
   image: { kind: "image", path: "" },
 };
 
-/** Fill, padding, corner radius and shadow, shared by the editor and Beautify. */
+/** Fill, padding, corner radius and shadow, shared by the editor and markup's Beautify. */
 export function BackgroundControls({
   background: bg,
   onChange,

@@ -1,8 +1,8 @@
 //! Screenshots: pick a target, capture it, copy and save it, show the thumbnail.
 
-pub mod beautify;
 mod clipboard;
 pub mod files;
+pub mod markup;
 mod sound;
 mod thumbnail;
 pub mod thumbnail_layout;
@@ -30,12 +30,12 @@ use crate::{
     settings::{ScreenshotSettings, SettingsStore},
 };
 
-/// Unsaved captures stay in the cache this long, for drag and drop and Beautify.
+/// Unsaved captures stay in the cache this long, for drag and drop and markup.
 const CACHE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// A screenshot kept in memory while its thumbnail or Beautify window is open.
+/// A screenshot kept in memory while its thumbnail or markup window is open.
 pub struct Capture {
     pub id: u64,
     /// File name without the extension.
@@ -82,6 +82,28 @@ impl Capture {
             png,
             file,
             saved: Mutex::new(saved),
+        })
+    }
+
+    /// A PNG file to edit, `scale_factor` pixels per point; it counts as saved.
+    #[cfg(feature = "synthetic")]
+    pub fn open(path: &Path, scale_factor: f64) -> Result<Self, String> {
+        let (width, height, rgba) =
+            recast_render::bitmap::load_png(path).map_err(|e| e.to_string())?;
+        let png = std::fs::read(path).map_err(|e| e.to_string())?;
+        Ok(Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            name: path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            width,
+            height,
+            scale_factor,
+            rgba,
+            png,
+            file: path.to_path_buf(),
+            saved: Mutex::new(Some(path.to_path_buf())),
         })
     }
 
@@ -145,7 +167,7 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
 pub fn edit(app: &AppHandle, capture: Arc<Capture>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = beautify::open_window(&app, capture) {
+        if let Err(e) = markup::open_window(&app, capture) {
             log::warn!("cannot open the screenshot editor: {e}");
         }
     });

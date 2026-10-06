@@ -8,7 +8,7 @@ use tauri::{ActivationPolicy, AppHandle, Manager, WebviewWindow, WebviewWindowBu
 const REGULAR_LABELS: &[&str] = &["library", "settings", "onboarding"];
 const REGULAR_PREFIXES: &[&str] = &[
     crate::editor::commands::LABEL_PREFIX,
-    crate::screenshots::beautify::LABEL_PREFIX,
+    crate::screenshots::markup::LABEL_PREFIX,
 ];
 
 fn is_regular(label: &str) -> bool {
@@ -99,18 +99,12 @@ mod tests {
         assert!(tracker.closed("editor-0").is_none(), "settings still open");
         assert!(is(tracker.closed("settings"), ActivationPolicy::Accessory));
         assert!(tracker.closed("settings").is_none(), "already closed");
-        assert!(is(tracker.opened("beautify-3"), ActivationPolicy::Regular));
+        assert!(is(tracker.opened("markup-3"), ActivationPolicy::Regular));
     }
 
     #[test]
     fn every_regular_window_counts() {
-        for label in [
-            "library",
-            "settings",
-            "onboarding",
-            "editor-12",
-            "beautify-1",
-        ] {
+        for label in ["library", "settings", "onboarding", "editor-12", "markup-1"] {
             let tracker = Tracker::default();
             assert!(
                 is(tracker.opened(label), ActivationPolicy::Regular),
@@ -147,10 +141,7 @@ mod tests {
             );
             checked += builders;
         }
-        assert_eq!(
-            checked, 3,
-            "library/settings/onboarding, editor and Beautify"
-        );
+        assert_eq!(checked, 3, "library/settings/onboarding, editor and markup");
     }
 
     #[test]
