@@ -113,6 +113,25 @@ describe("Inspector", () => {
     expect(controlsWithoutHint(container)).toEqual([]);
   });
 
+  it("says plainly which audio a recording lacks", () => {
+    show("audio");
+    expect(
+      screen.getByText("This recording has no system audio."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/has no the/)).toBeNull();
+  });
+
+  it("puts the sound pack hint under its row, not beside the menu", () => {
+    show("clicks");
+    const hint = screen.getByText(
+      "The sound each click makes. Press play to hear it.",
+    );
+    const menu = screen.getByRole("combobox", { name: "Sound pack" });
+    const row = menu.closest('[data-slot="field-row"]')!;
+    expect(row.contains(hint)).toBe(false);
+    expect(row.parentElement!.contains(hint)).toBe(true);
+  });
+
   it("warns when a preset enlarges the recording", () => {
     show("export", (s) => {
       s.export.resolution = "4k";

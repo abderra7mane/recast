@@ -400,6 +400,11 @@ fn setup(
     Ok(())
 }
 
+/// The app's configuration and frontend assets, as compiled into the binary.
+fn context() -> tauri::Context {
+    tauri::generate_context!()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let last_run = crash::last_log_write(&logging::config().active_file());
@@ -430,7 +435,7 @@ pub fn run() {
             builder.mount_events(app);
             setup(app, last_run)
         })
-        .build(tauri::generate_context!())
+        .build(context())
         .expect("error while building Recast")
         .run(|app, event| match event {
             // Closing the last window keeps Recast in the menu bar.
@@ -465,6 +470,32 @@ mod tests {
         let live = recast_project::Bundle::create(dir.path(), "Live").unwrap();
         assert!(super::discard_bundle(live.path()).is_err());
         assert!(live.path().exists());
+    }
+
+    /// Tauri's invoke fetches `ipc://localhost/<command>` (or `http://ipc.localhost`
+    /// on some platforms). If the CSP blocks it, Tauri silently falls back to
+    /// postMessage, which sends JSON and drops raw byte bodies.
+    #[test]
+    fn the_bundled_csp_lets_the_ipc_protocol_through() {
+        let config = super::context().config().clone();
+        let csp = config
+            .app
+            .security
+            .csp
+            .expect("a content security policy")
+            .to_string();
+        let connect = csp
+            .split(';')
+            .map(str::trim)
+            .find_map(|directive| directive.strip_prefix("connect-src "))
+            .unwrap_or_else(|| panic!("no connect-src in {csp}"));
+        let sources: Vec<&str> = connect.split_whitespace().collect();
+        for needed in ["'self'", "ipc:", "http://ipc.localhost", "ws://127.0.0.1:*"] {
+            assert!(
+                sources.contains(&needed),
+                "connect-src lacks {needed}: {csp}"
+            );
+        }
     }
 
     #[test]

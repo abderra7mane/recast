@@ -17,6 +17,7 @@ import {
   type SoundPack,
 } from "@/bindings";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -34,6 +35,7 @@ import {
   Choice,
   ColorField,
   Field,
+  Hint,
   Section,
   SliderField,
   SwitchField,
@@ -84,21 +86,30 @@ function SelectField<T extends string>({
   children?: ReactNode;
 }) {
   return (
-    <Field label={label} hint={hint}>
-      {children}
-      <Select value={value} onValueChange={(v) => onChange(v as T)}>
-        <SelectTrigger size="sm" className="w-36" aria-label={label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent position="popper">
-          {options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </Field>
+    <div data-slot="field" className="space-y-1">
+      <div
+        data-slot="field-row"
+        className="flex items-center justify-between gap-3"
+      >
+        <Label className="text-sm font-normal">{label}</Label>
+        <div className="flex shrink-0 items-center gap-1">
+          {children}
+          <Select value={value} onValueChange={(v) => onChange(v as T)}>
+            <SelectTrigger size="sm" className="w-36" aria-label={label}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              {options.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <Hint>{hint}</Hint>
+    </div>
   );
 }
 
@@ -374,12 +385,16 @@ function ClicksTab({ settings }: { settings: Settings }) {
 function VolumeField({
   label,
   source,
+  missing,
   value,
   available,
   onChange,
 }: {
   label: string;
+  /** What the track holds, as in "how loud <source> is". */
   source: string;
+  /** What a recording without the track lacks, as in "has no <missing>". */
+  missing: string;
   value: number;
   available: boolean;
   onChange: (value: number) => void;
@@ -393,7 +408,7 @@ function VolumeField({
         hint={
           available
             ? `Leaves ${source} out of the video.`
-            : `This recording has no ${source}.`
+            : `This recording has no ${missing}.`
         }
         checked={available && value === 0}
         disabled={!available}
@@ -426,6 +441,7 @@ function AudioTab({
       <VolumeField
         label="Microphone"
         source="the microphone"
+        missing="microphone audio"
         value={audio.micVolume}
         available={project.recording.mic !== null}
         onChange={(micVolume) => update("audio", { micVolume })}
@@ -433,6 +449,7 @@ function AudioTab({
       <VolumeField
         label="System audio"
         source="the sound your Mac played"
+        missing="system audio"
         value={audio.systemVolume}
         available={project.recording.systemAudio !== null}
         onChange={(systemVolume) => update("audio", { systemVolume })}

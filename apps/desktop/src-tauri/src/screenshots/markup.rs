@@ -317,7 +317,10 @@ pub async fn markup_stage(
     request: Request<'_>,
 ) -> Result<(), String> {
     let InvokeBody::Raw(bytes) = request.body() else {
-        return Err("expected the image bytes".into());
+        return Err(
+            "the edited screenshot arrived without its pixels (the IPC sent JSON, not raw bytes)"
+                .into(),
+        );
     };
     let image = Image::new(
         header(&request, WIDTH_HEADER)?,
