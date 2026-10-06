@@ -25,7 +25,7 @@ use objc2_app_kit::{
     NSDraggingContext, NSDraggingItem, NSDraggingSession, NSDraggingSource, NSEvent,
     NSEventModifierFlags, NSEventPhase, NSFloatingWindowLevel, NSImage, NSMenu, NSMenuItem,
     NSPanel, NSResponder, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSData, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL,
@@ -546,7 +546,7 @@ pub fn show(mtm: MainThreadMarker, thumbnail: Thumbnail, on_action: OnAction) {
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary,
     );
-    panel.setSharingType(NSWindowSharingType::None);
+    crate::appkit::hide_from_capture(&panel);
     panel.setHidesOnDeactivate(false);
 
     let timer = Arc::new(Mutex::new(DismissTimer::start(

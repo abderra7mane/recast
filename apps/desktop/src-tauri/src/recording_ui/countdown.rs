@@ -14,7 +14,7 @@ use dispatch2::DispatchQueue;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained};
 use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSColor, NSEvent, NSResponder, NSScreenSaverWindowLevel,
-    NSView, NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
+    NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use recast_capture::picker::rect_from_appkit;
@@ -181,7 +181,7 @@ pub fn show(
             | NSWindowCollectionBehavior::Stationary
             | NSWindowCollectionBehavior::IgnoresCycle,
     );
-    panel.setSharingType(NSWindowSharingType::None);
+    crate::appkit::hide_from_capture(&panel);
     panel.setHidesOnDeactivate(false);
 
     let view = CountdownView::alloc(mtm).set_ivars(ViewIvars {

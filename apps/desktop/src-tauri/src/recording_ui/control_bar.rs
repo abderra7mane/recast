@@ -18,8 +18,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSEvent, NSPanel, NSResponder, NSStatusWindowLevel,
-    NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowSharingType,
-    NSWindowStyleMask,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 
@@ -205,7 +204,7 @@ pub fn show(mtm: MainThreadMarker, display_id: u32, started: Instant, on_button:
             | NSWindowCollectionBehavior::FullScreenAuxiliary
             | NSWindowCollectionBehavior::IgnoresCycle,
     );
-    panel.setSharingType(NSWindowSharingType::None);
+    crate::appkit::hide_from_capture(&panel);
     panel.setHidesOnDeactivate(false);
     panel.setAcceptsMouseMovedEvents(true);
 

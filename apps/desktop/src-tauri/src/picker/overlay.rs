@@ -13,7 +13,7 @@ use objc2::{
 use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSColor, NSCursor, NSEvent, NSResponder, NSScreen,
     NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindingRule,
-    NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
+    NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use recast_capture::picker::{
@@ -432,7 +432,7 @@ fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<KeyPanel> {
             | NSWindowCollectionBehavior::Stationary
             | NSWindowCollectionBehavior::IgnoresCycle,
     );
-    panel.setSharingType(NSWindowSharingType::None);
+    crate::appkit::hide_from_capture(&panel);
     panel.setHidesOnDeactivate(false);
     panel.setIgnoresMouseEvents(false);
     panel.setAcceptsMouseMovedEvents(true);

@@ -3,7 +3,7 @@ PNPM := pnpm --dir $(DESKTOP)
 # The local Apple Development certificate keeps macOS permissions across rebuilds.
 SIGNING_IDENTITY ?= Apple Development
 
-.PHONY: help install dev build bindings test test-rust test-ui lint lint-rust lint-ui lint-workflows fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions updater-key release-check release-bundle release-assets clean
+.PHONY: help install dev build qa-build bindings test test-rust test-ui lint lint-rust lint-ui lint-workflows fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions updater-key release-check release-bundle release-assets clean
 
 help:
 	@echo "install   install JS dependencies"
@@ -37,6 +37,12 @@ dev: install
 
 build: install bindings
 	APPLE_SIGNING_IDENTITY="$(SIGNING_IDENTITY)" $(PNPM) tauri build --bundles app
+
+# Test build with development hooks, kept apart from the release bundle.
+# RECAST_QA_CAPTURABLE=1 makes its overlays visible to screenshots.
+qa-build: install bindings
+	CARGO_TARGET_DIR="$(CURDIR)/target/qa" APPLE_SIGNING_IDENTITY="$(SIGNING_IDENTITY)" $(PNPM) tauri build --bundles app --features synthetic
+	@echo "$(CURDIR)/target/qa/release/bundle/macos/Recast.app"
 
 bindings:
 	cargo run --quiet -p recast-desktop --example export-bindings

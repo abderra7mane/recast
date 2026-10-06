@@ -179,3 +179,50 @@ pub fn release_later<T: 'static>(value: T, mtm: MainThreadMarker) {
         drop(bound.into_inner(mtm));
     });
 }
+
+/// Hides Recast's own overlays from screen capture. QA builds with the `synthetic`
+/// feature can set `RECAST_QA_CAPTURABLE=1` to let screenshots see them.
+pub fn hide_from_capture(window: &NSWindow) {
+    window.setSharingType(overlay_sharing(qa_capturable()));
+}
+
+#[cfg(feature = "synthetic")]
+fn qa_capturable() -> bool {
+    std::env::var_os("RECAST_QA_CAPTURABLE").is_some_and(|v| v == "1")
+}
+
+#[cfg(not(feature = "synthetic"))]
+fn qa_capturable() -> bool {
+    false
+}
+
+fn overlay_sharing(capturable: bool) -> objc2_app_kit::NSWindowSharingType {
+    if capturable {
+        objc2_app_kit::NSWindowSharingType::ReadOnly
+    } else {
+        objc2_app_kit::NSWindowSharingType::None
+    }
+}
+
+#[cfg(test)]
+mod sharing_tests {
+    use super::*;
+
+    #[test]
+    fn overlays_are_hidden_unless_qa_capturable() {
+        assert_eq!(
+            overlay_sharing(false),
+            objc2_app_kit::NSWindowSharingType::None
+        );
+        assert_eq!(
+            overlay_sharing(true),
+            objc2_app_kit::NSWindowSharingType::ReadOnly
+        );
+    }
+
+    #[cfg(not(feature = "synthetic"))]
+    #[test]
+    fn release_builds_ignore_the_qa_switch() {
+        assert!(!qa_capturable());
+    }
+}
