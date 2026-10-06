@@ -352,6 +352,7 @@ fn setup(
     last_run: Option<std::time::SystemTime>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    appkit::set_cursor_in_background();
     let settings_path = app.path().app_data_dir()?.join(settings::FILE_NAME);
     app.manage(SettingsStore::load(&settings_path));
     let handle = app.handle();

@@ -145,6 +145,39 @@ pub fn cursor(
     NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, hotspot)
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn _CGSDefaultConnection() -> i32;
+    fn CGSSetConnectionProperty(
+        connection: i32,
+        target: i32,
+        key: *const std::ffi::c_void,
+        value: *const std::ffi::c_void,
+    ) -> i32;
+}
+
+/// Lets Recast set the cursor while another app is active. macOS doesn't always grant
+/// the activation an overlay asks for, and it ignores a background app's cursor
+/// otherwise. This is the private window server property screenshot tools rely on.
+pub fn set_cursor_in_background() {
+    let key = NSString::from_str("SetsCursorInBackground");
+    let value = NSNumber::new_bool(true);
+    // SAFETY: NSString and NSNumber are toll-free bridged with CFString and CFBoolean,
+    // and both outlive the call.
+    let status = unsafe {
+        let connection = _CGSDefaultConnection();
+        CGSSetConnectionProperty(
+            connection,
+            connection,
+            (&*key as *const NSString).cast(),
+            (&*value as *const NSNumber).cast(),
+        )
+    };
+    if status != 0 {
+        log::warn!("cannot set the cursor in the background: CGError {status}");
+    }
+}
+
 /// The Core Graphics display id of a screen.
 pub fn display_id(screen: &NSScreen) -> Option<u32> {
     let key = NSString::from_str("NSScreenNumber");
