@@ -13,7 +13,7 @@ use objc2::{
 use objc2_app_kit::{
     NSBackingStoreType, NSBezierPath, NSColor, NSCursor, NSEvent, NSImage, NSResponder, NSScreen,
     NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindingRule,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 use recast_capture::picker::{
@@ -454,6 +454,9 @@ fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<KeyPanel> {
     panel.setOpaque(false);
     panel.setBackgroundColor(Some(&NSColor::clearColor()));
     panel.setHasShadow(false);
+    // The open animation changes the frame the window server reports for a moment, which
+    // window managers such as Rectangle take for the user dragging a window.
+    panel.setAnimationBehavior(NSWindowAnimationBehavior::None);
     panel.setLevel(NSScreenSaverWindowLevel);
     panel.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces

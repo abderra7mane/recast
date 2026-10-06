@@ -80,11 +80,25 @@ pub async fn pick(app: &AppHandle, request: PickRequest) -> Result<Option<Pick>,
         return Err("The picker is already open.".into());
     }
     let _guard = OpenGuard;
-    let windows =
+    // Listing the windows is slow, and a drag that starts before the overlays show goes
+    // to the app below, so only the mode that picks windows waits for it.
+    let windows = if request.mode == PickMode::Window {
         tauri::async_runtime::spawn_blocking(|| recast_capture::platform().window_stack())
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+    } else {
+        Vec::new()
+    };
+    // A drag that began before the overlays could show, as one can while a menu bar menu
+    // closes, belongs to the app below; the overlays wait for it to end.
+    tauri::async_runtime::spawn_blocking(|| {
+        while crate::appkit::left_button_down() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let own_pid = std::process::id() as i32;
     app.run_on_main_thread(move || {

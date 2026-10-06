@@ -143,6 +143,7 @@ pub fn image(size_px: usize, pixels: &[u8], size_points: f64) -> Retained<NSImag
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGCursorIsVisible() -> u32;
+    fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
     fn _CGSDefaultConnection() -> i32;
     fn CGSSetConnectionProperty(
         connection: i32,
@@ -177,6 +178,13 @@ pub fn set_cursor_in_background() {
 pub fn cursor_visible() -> bool {
     // SAFETY: takes no arguments and only reads the window server's cursor state.
     unsafe { CGCursorIsVisible() != 0 }
+}
+
+pub fn left_button_down() -> bool {
+    const COMBINED_SESSION_STATE: i32 = 0;
+    const LEFT_BUTTON: u32 = 0;
+    // SAFETY: takes plain values and only reads the input state.
+    unsafe { CGEventSourceButtonState(COMBINED_SESSION_STATE, LEFT_BUTTON) }
 }
 
 /// The Core Graphics display id of a screen.
