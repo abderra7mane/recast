@@ -1,15 +1,21 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import {
   AudioLines,
   Film,
   ImageIcon,
   MousePointer2,
   MousePointerClick,
+  Play,
   Trash2,
   ZoomIn,
 } from "lucide-react";
 
-import type { Project, SoundPack } from "@/bindings";
+import {
+  commands,
+  type Project,
+  type Resolution,
+  type SoundPack,
+} from "@/bindings";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -33,6 +39,7 @@ import {
   SwitchField,
 } from "@/editor/inspector/fields";
 import { BackgroundControls } from "@/editor/inspector/BackgroundControls";
+import { autoSize, ENLARGE_WARNING, enlargement } from "@/editor/export-size";
 import {
   percent,
   times,
@@ -63,22 +70,27 @@ function update<K extends SettingsSection>(
 
 function SelectField<T extends string>({
   label,
+  hint,
   value,
   options,
   onChange,
+  children,
 }: {
   label: string;
+  hint: ReactNode;
   value: T;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
+  children?: ReactNode;
 }) {
   return (
-    <Field label={label}>
+    <Field label={label} hint={hint}>
+      {children}
       <Select value={value} onValueChange={(v) => onChange(v as T)}>
-        <SelectTrigger size="sm" className="w-36">
+        <SelectTrigger size="sm" className="w-36" aria-label={label}>
           <SelectValue />
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent position="popper">
           {options.map((o) => (
             <SelectItem key={o.value} value={o.value}>
               {o.label}
@@ -105,6 +117,7 @@ function CursorTab({ settings }: { settings: Settings }) {
     <Section>
       <SliderField
         label="Size"
+        hint="How big Recast draws the cursor."
         value={cursor.size}
         min={0.5}
         max={4}
@@ -114,6 +127,7 @@ function CursorTab({ settings }: { settings: Settings }) {
       />
       <SliderField
         label="Smoothing"
+        hint="Evens out shaky cursor movement. More is smoother but lags behind."
         value={cursor.smoothing}
         min={0}
         max={1}
@@ -122,6 +136,7 @@ function CursorTab({ settings }: { settings: Settings }) {
       />
       <SwitchField
         label="Hide when idle"
+        hint="Fades the cursor out while it doesn't move."
         checked={cursor.hideWhenIdle}
         onChange={(hideWhenIdle) => update("cursor", { hideWhenIdle })}
       />
@@ -150,6 +165,7 @@ function SegmentEditor() {
     <Section title="Segment">
       <SliderField
         label="Zoom"
+        hint="How far this segment zooms in."
         value={segment.level}
         min={1}
         max={4}
@@ -158,6 +174,8 @@ function SegmentEditor() {
         onChange={(level) => updateSegment(selected, { level })}
       />
       <Choice
+        label="Focus"
+        hint="Follow cursor pans along with the pointer. Fixed point stays on one spot."
         value={focus.kind}
         options={[
           { value: "followCursor", label: "Follow cursor" },
@@ -173,6 +191,7 @@ function SegmentEditor() {
         <>
           <SliderField
             label="Horizontal"
+            hint="Where the fixed point is, from left to right."
             value={focus.x}
             min={0}
             max={1}
@@ -183,6 +202,7 @@ function SegmentEditor() {
           />
           <SliderField
             label="Vertical"
+            hint="Where the fixed point is, from top to bottom."
             value={focus.y}
             min={0}
             max={1}
@@ -193,13 +213,18 @@ function SegmentEditor() {
           />
         </>
       )}
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => deleteSegment(selected)}
+      <Field
+        label="Remove"
+        hint="Deletes this zoom. The Delete key does the same."
       >
-        <Trash2 /> Delete segment
-      </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => deleteSegment(selected)}
+        >
+          <Trash2 /> Delete
+        </Button>
+      </Field>
     </Section>
   );
 }
@@ -211,11 +236,17 @@ function ZoomTab({ settings }: { settings: Settings }) {
       <Section>
         <SwitchField
           label="Auto zoom on clicks"
+          hint={
+            zoom.auto
+              ? "Zooms in where you click and back out when you pause. Editing a segment turns it off and keeps the segments."
+              : "Zooms in where you click and back out when you pause."
+          }
           checked={zoom.auto}
           onChange={(auto) => update("zoom", { auto })}
         />
         <SliderField
           label="Default zoom"
+          hint="How far auto zoom and new segments zoom in."
           value={zoom.level}
           min={1.25}
           max={4}
@@ -223,12 +254,6 @@ function ZoomTab({ settings }: { settings: Settings }) {
           format={times}
           onChange={(level) => update("zoom", { level })}
         />
-        {zoom.auto && (
-          <p className="text-muted-foreground text-xs">
-            Editing a segment turns auto zoom off and keeps the segments as they
-            are.
-          </p>
-        )}
       </Section>
       <SegmentEditor />
     </>
@@ -238,8 +263,26 @@ function ZoomTab({ settings }: { settings: Settings }) {
 const PACKS: { value: SoundPack; label: string }[] = [
   { value: "mouseClick", label: "Mouse click" },
   { value: "softTap", label: "Soft tap" },
-  { value: "mechanical", label: "Mechanical" },
+  { value: "mechanical", label: "Mechanical keyboard" },
+  { value: "trackpadTap", label: "Trackpad tap" },
+  { value: "pop", label: "Pop" },
+  { value: "tick", label: "Subtle tick" },
 ];
+
+let previewContext: AudioContext | null = null;
+
+async function previewSound(pack: SoundPack, volume: number) {
+  const wav = await commands.clickSoundPreview(pack);
+  previewContext ??= new AudioContext();
+  const context = previewContext;
+  const buffer = await context.decodeAudioData(new Uint8Array(wav).buffer);
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  const gain = context.createGain();
+  gain.gain.value = volume;
+  source.connect(gain).connect(context.destination);
+  source.start();
+}
 
 function ClicksTab({ settings }: { settings: Settings }) {
   const { clicks, sounds } = settings;
@@ -248,16 +291,19 @@ function ClicksTab({ settings }: { settings: Settings }) {
       <Section title="Effects">
         <SwitchField
           label="Ripple"
+          hint="Shows a ring where you click."
           checked={clicks.ripple}
           onChange={(ripple) => update("clicks", { ripple })}
         />
         <ColorField
           label="Ripple color"
+          hint="The color of the click ring."
           value={clicks.color}
           onChange={(color) => update("clicks", { color })}
         />
         <SliderField
           label="Ripple size"
+          hint="How big the click ring grows."
           value={clicks.size}
           min={4}
           max={80}
@@ -268,6 +314,7 @@ function ClicksTab({ settings }: { settings: Settings }) {
         />
         <SwitchField
           label="Squish cursor"
+          hint="Briefly shrinks the cursor on each click."
           checked={clicks.squish}
           onChange={(squish) => update("clicks", { squish })}
         />
@@ -275,17 +322,35 @@ function ClicksTab({ settings }: { settings: Settings }) {
       <Section title="Sounds">
         <SwitchField
           label="Click sounds"
+          hint="Plays a click sound in the video for each click."
           checked={sounds.enabled}
           onChange={(enabled) => update("sounds", { enabled })}
         />
         <SelectField
           label="Sound pack"
+          hint="The sound each click makes. Press play to hear it."
           value={sounds.pack}
           options={PACKS}
           onChange={(pack) => update("sounds", { pack })}
-        />
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                aria-label="Play the sound"
+                onClick={() => void previewSound(sounds.pack, sounds.volume)}
+              >
+                <Play />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Play the sound</TooltipContent>
+          </Tooltip>
+        </SelectField>
         <SliderField
           label="Volume"
+          hint="How loud the click sounds are."
           value={sounds.volume}
           min={0}
           max={1}
@@ -295,6 +360,7 @@ function ClicksTab({ settings }: { settings: Settings }) {
         />
         <SwitchField
           label="Separate left and right"
+          hint="Gives right clicks a sound of their own."
           checked={sounds.separateLeftRight}
           onChange={(separateLeftRight) =>
             update("sounds", { separateLeftRight })
@@ -307,11 +373,13 @@ function ClicksTab({ settings }: { settings: Settings }) {
 
 function VolumeField({
   label,
+  source,
   value,
   available,
   onChange,
 }: {
   label: string;
+  source: string;
   value: number;
   available: boolean;
   onChange: (value: number) => void;
@@ -322,12 +390,18 @@ function VolumeField({
     <div className="space-y-3">
       <SwitchField
         label={available ? `${label} muted` : `${label} (not recorded)`}
+        hint={
+          available
+            ? `Leaves ${source} out of the video.`
+            : `This recording has no ${source}.`
+        }
         checked={available && value === 0}
         disabled={!available}
         onChange={(muted) => onChange(muted ? 0 : lastAudible.current)}
       />
       <SliderField
         label={`${label} volume`}
+        hint={`How loud ${source} is in the video.`}
         value={value}
         min={0}
         max={2}
@@ -351,12 +425,14 @@ function AudioTab({
     <Section>
       <VolumeField
         label="Microphone"
+        source="the microphone"
         value={audio.micVolume}
         available={project.recording.mic !== null}
         onChange={(micVolume) => update("audio", { micVolume })}
       />
       <VolumeField
         label="System audio"
+        source="the sound your Mac played"
         value={audio.systemVolume}
         available={project.recording.systemAudio !== null}
         onChange={(systemVolume) => update("audio", { systemVolume })}
@@ -365,12 +441,34 @@ function AudioTab({
   );
 }
 
-function ExportTab({ settings }: { settings: Settings }) {
+const RESOLUTIONS: { value: Resolution; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "1080p", label: "1080p" },
+  { value: "1440p", label: "1440p" },
+  { value: "4k", label: "4K" },
+];
+
+function ExportTab({
+  settings,
+  project,
+}: {
+  settings: Settings;
+  project: Project;
+}) {
   const exp = settings.export;
+  const video = {
+    width: project.recording.width,
+    height: project.recording.height,
+  };
+  const padding = settings.background.padding;
+  const [autoWidth, autoHeight] = autoSize(video, padding);
+  const scale = enlargement(video, padding, exp.resolution);
+  const preset = RESOLUTIONS.find((r) => r.value === exp.resolution)?.label;
   return (
     <Section>
       <SelectField
         label="Codec"
+        hint="H.264 plays everywhere. HEVC makes smaller files."
         value={exp.codec}
         options={[
           { value: "h264", label: "H.264" },
@@ -380,16 +478,20 @@ function ExportTab({ settings }: { settings: Settings }) {
       />
       <SelectField
         label="Resolution"
+        hint={`Auto keeps every recorded pixel sharp (${autoWidth} × ${autoHeight}). The others resize to a set height.`}
         value={exp.resolution}
-        options={[
-          { value: "1080p", label: "1080p" },
-          { value: "1440p", label: "1440p" },
-          { value: "4k", label: "4K" },
-        ]}
+        options={RESOLUTIONS}
         onChange={(resolution) => update("export", { resolution })}
       />
+      {scale > ENLARGE_WARNING && (
+        <p role="status" className="text-xs text-amber-500">
+          The recording is {video.width} × {video.height} px. {preset} enlarges
+          it {scale.toFixed(1)}×, so text may look soft.
+        </p>
+      )}
       <SelectField
         label="Frame rate"
+        hint="60 fps moves more smoothly. 30 fps makes smaller files."
         value={exp.fps}
         options={[
           { value: "30", label: "30 fps" },
@@ -399,6 +501,7 @@ function ExportTab({ settings }: { settings: Settings }) {
       />
       <SliderField
         label="Quality"
+        hint="Higher looks better and makes larger files."
         value={exp.quality}
         min={0}
         max={1}
@@ -468,7 +571,7 @@ export function Inspector({
             <AudioTab settings={settings} project={project} />
           </TabsContent>
           <TabsContent value="export">
-            <ExportTab settings={settings} />
+            <ExportTab settings={settings} project={project} />
           </TabsContent>
         </div>
       </div>

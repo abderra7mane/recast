@@ -215,7 +215,7 @@ fn exports_mp4_with_expected_size_rate_duration_and_audio() {
     )
     .unwrap();
 
-    let (w, h) = recast_render::layout::output_size(320.0, 200.0, 0.08, Resolution::P1080);
+    let (w, h) = recast_render::layout::output_size(320, 200, 0.08, Resolution::P1080);
     assert_eq!((summary.width, summary.height), (w, h));
     assert_eq!(h, 1080);
     assert_eq!((summary.fps, summary.frames), (30, 90));

@@ -25,6 +25,9 @@ pub struct Scene {
     /// Size of the recorded area in points.
     pub screen_width: f64,
     pub screen_height: f64,
+    /// Size of the recording in pixels.
+    pub video_width: u32,
+    pub video_height: u32,
     bounds: Rect,
     cursors: HashMap<u32, CursorImage>,
     default_cursor: CursorImage,
@@ -34,6 +37,7 @@ pub struct Scene {
 /// What a scene is built from.
 pub struct SceneParts<'a> {
     pub bounds: Rect,
+    pub video_size: (u32, u32),
     pub duration_ms: f64,
     pub events: &'a EventLog,
     pub settings: EditSettings,
@@ -51,6 +55,8 @@ impl Scene {
             timeline,
             screen_width: parts.bounds.width,
             screen_height: parts.bounds.height,
+            video_width: parts.video_size.0,
+            video_height: parts.video_size.1,
             bounds: parts.bounds,
             cursors: parts.cursors,
             default_cursor: default_arrow(4.0),
@@ -98,6 +104,7 @@ impl Scene {
         let recording = &project.recording;
         Ok(Self::new(SceneParts {
             bounds: recording.bounds,
+            video_size: (recording.width, recording.height),
             duration_ms: recording.duration_ms,
             events,
             settings,
@@ -156,8 +163,8 @@ impl Scene {
 
     pub fn output_size_for(&self, resolution: Resolution) -> (u32, u32) {
         output_size(
-            self.screen_width,
-            self.screen_height,
+            self.video_width,
+            self.video_height,
             self.settings.background.padding,
             resolution,
         )

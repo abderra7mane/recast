@@ -284,6 +284,7 @@ export function Settings() {
           <Toggle
             id="system-audio"
             label="Record system audio"
+            description="Records the sound your Mac plays, like videos and alerts."
             checked={settings.recording.systemAudio}
             onChange={(systemAudio) => recording({ systemAudio })}
           />

@@ -565,8 +565,8 @@ impl Compositor {
         layout(
             self.width,
             self.height,
-            scene.screen_width,
-            scene.screen_height,
+            scene.video_width,
+            scene.video_height,
             &scene.settings.background,
         )
     }

@@ -54,7 +54,7 @@ impl Default for RecordingSettings {
         Self {
             countdown: true,
             mic: false,
-            system_audio: true,
+            system_audio: false,
             folder: None,
         }
     }
@@ -111,25 +111,31 @@ impl ShortcutSettings {
 }
 
 /// The settings format; files without a version are older.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// Capture Window's default shortcut before version 1.
 const OLD_CAPTURE_WINDOW_DEFAULT: &str = "Alt+Shift+Cmd+KeyW";
 
-/// Brings settings JSON from before version 1 up to date:
+/// Brings older settings JSON up to date.
+///
+/// Before version 1:
 /// - the single "record" shortcut, which started with window picking and allowed a drag
 ///   for an area, becomes Record Area's;
 /// - Capture Window no longer has a default shortcut, so the old default is dropped,
 ///   while a shortcut the user picked stays.
+///
+/// Before version 2, system audio was recorded by default; that default is turned off.
 fn migrate(mut json: serde_json::Value) -> serde_json::Value {
     let Some(settings) = json.as_object_mut() else {
         return json;
     };
-    if settings.contains_key("version") {
-        return json;
-    }
-    if let Some(shortcuts) = settings
-        .get_mut("shortcuts")
-        .and_then(|s| s.as_object_mut())
+    let version = settings
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if version < 1
+        && let Some(shortcuts) = settings
+            .get_mut("shortcuts")
+            .and_then(|s| s.as_object_mut())
     {
         if let Some(record) = shortcuts.remove("record") {
             shortcuts.entry("recordArea").or_insert(record);
@@ -140,7 +146,17 @@ fn migrate(mut json: serde_json::Value) -> serde_json::Value {
             shortcuts.insert("captureWindow".into(), serde_json::Value::Null);
         }
     }
-    settings.insert("version".into(), VERSION.into());
+    if version < 2
+        && let Some(recording) = settings
+            .get_mut("recording")
+            .and_then(|r| r.as_object_mut())
+        && recording.get("systemAudio") == Some(&serde_json::Value::Bool(true))
+    {
+        recording.insert("systemAudio".into(), false.into());
+    }
+    if version < u64::from(VERSION) {
+        settings.insert("version".into(), VERSION.into());
+    }
     json
 }
 
@@ -449,6 +465,38 @@ mod tests {
             Some("Alt+Shift+Cmd+KeyW"),
             "current files are left alone"
         );
+    }
+
+    #[test]
+    fn system_audio_is_off_by_default() {
+        assert!(!AppSettings::default().recording.system_audio);
+    }
+
+    #[test]
+    fn the_old_system_audio_default_is_turned_off_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"version":1,"recording":{"systemAudio":true,"mic":true,"countdown":false}}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::load(&path);
+        let settings = store.get();
+        assert_eq!(settings.version, VERSION);
+        assert!(!settings.recording.system_audio);
+        assert!(settings.recording.mic && !settings.recording.countdown);
+
+        store.update(|s| s.recording.system_audio = true).unwrap();
+        assert!(
+            SettingsStore::load(&path).get().recording.system_audio,
+            "turned on again after the upgrade, it stays on"
+        );
+
+        std::fs::write(&path, r#"{"recording":{"systemAudio":true}}"#).unwrap();
+        assert!(!SettingsStore::load(&path).get().recording.system_audio);
+        std::fs::write(&path, r#"{"version":1,"recording":{"systemAudio":false}}"#).unwrap();
+        assert!(!SettingsStore::load(&path).get().recording.system_audio);
     }
 
     #[test]

@@ -333,6 +333,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             editor_commands::editor_stats,
             editor_commands::export_start,
             editor_commands::export_cancel,
+            editor_commands::click_sound_preview,
         ])
 }
 

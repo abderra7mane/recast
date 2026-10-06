@@ -25,6 +25,7 @@ import {
 import { editorStore, redo, undo, useEditor } from "@/editor/store";
 import { createSequence, createSettingsSync } from "@/editor/sync";
 import { Timeline } from "@/editor/Timeline";
+import { Tip } from "@/editor/Tip";
 
 /** Sends edits to the backend; returns a function that waits until all are applied. */
 function useSettingsSync() {
@@ -125,27 +126,31 @@ function PlayerBar({ durationMs }: { durationMs: number }) {
         {formatTime(timeMs)} / {formatTime(durationMs)}
       </span>
       <div className="flex flex-1 items-center justify-center gap-1">
-        <Button
-          size="icon"
-          variant="secondary"
-          className="size-9 rounded-full"
-          aria-label={playing ? "Pause" : "Play"}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={togglePlay}
-        >
-          {playing ? <Pause /> : <Play />}
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
-          className={cn("size-8", looping && "text-sky-400")}
-          aria-label="Loop"
-          aria-pressed={looping}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setLooping(!looping)}
-        >
-          <Repeat />
-        </Button>
+        <Tip label={playing ? "Pause (Space)" : "Play (Space)"}>
+          <Button
+            size="icon"
+            variant="secondary"
+            className="size-9 rounded-full"
+            aria-label={playing ? "Pause" : "Play"}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={togglePlay}
+          >
+            {playing ? <Pause /> : <Play />}
+          </Button>
+        </Tip>
+        <Tip label={looping ? "Stop looping" : "Play the clip in a loop"}>
+          <Button
+            size="icon"
+            variant="ghost"
+            className={cn("size-8", looping && "text-sky-400")}
+            aria-label="Loop"
+            aria-pressed={looping}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setLooping(!looping)}
+          >
+            <Repeat />
+          </Button>
+        </Tip>
       </div>
       <span className="text-muted-foreground w-28 text-right font-mono text-[10px]">
         {import.meta.env.DEV ? stats : ""}
@@ -165,26 +170,30 @@ function HistoryButtons() {
   );
   return (
     <div className="flex items-center">
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-8"
-        aria-label="Undo"
-        disabled={!canUndo}
-        onClick={undo}
-      >
-        <Undo2 />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        className="size-8"
-        aria-label="Redo"
-        disabled={!canRedo}
-        onClick={redo}
-      >
-        <Redo2 />
-      </Button>
+      <Tip label="Undo (⌘Z)">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-8"
+          aria-label="Undo"
+          disabled={!canUndo}
+          onClick={undo}
+        >
+          <Undo2 />
+        </Button>
+      </Tip>
+      <Tip label="Redo (⇧⌘Z)">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-8"
+          aria-label="Redo"
+          disabled={!canRedo}
+          onClick={redo}
+        >
+          <Redo2 />
+        </Button>
+      </Tip>
     </div>
   );
 }

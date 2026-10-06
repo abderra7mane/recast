@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   Choice,
   ColorField,
+  Field,
   Section,
   SliderField,
 } from "@/editor/inspector/fields";
@@ -41,6 +42,8 @@ export function BackgroundControls({
     <>
       <Section title="Fill">
         <Choice
+          label="Fill"
+          hint="What fills the space around the picture."
           value={fill.kind}
           options={[
             { value: "solid", label: "Solid" },
@@ -55,6 +58,7 @@ export function BackgroundControls({
         {fill.kind === "solid" && (
           <ColorField
             label="Color"
+            hint="The background color."
             value={fill.color}
             onChange={(color) => onChange({ fill: { ...fill, color } })}
           />
@@ -63,16 +67,19 @@ export function BackgroundControls({
           <>
             <ColorField
               label="From"
+              hint="The color the gradient starts with."
               value={fill.from}
               onChange={(from) => onChange({ fill: { ...fill, from } })}
             />
             <ColorField
               label="To"
+              hint="The color the gradient ends with."
               value={fill.to}
               onChange={(to) => onChange({ fill: { ...fill, to } })}
             />
             <SliderField
               label="Angle"
+              hint="The direction the gradient runs in."
               value={fill.angleDeg}
               min={0}
               max={360}
@@ -83,26 +90,30 @@ export function BackgroundControls({
           </>
         )}
         {fill.kind === "image" && (
-          <div className="space-y-2">
-            <p
-              className="text-muted-foreground truncate text-xs"
-              title={fill.path}
-            >
-              {fill.path ? fill.path.split("/").pop() : "No image chosen"}
-            </p>
+          <Field
+            label="Image"
+            hint={
+              <span className="block truncate" title={fill.path}>
+                {fill.path
+                  ? fill.path.split("/").pop()
+                  : "A PNG or JPEG that covers the frame."}
+              </span>
+            }
+          >
             <Button
               size="sm"
               variant="outline"
               onClick={() => void pickImage()}
             >
-              Choose image…
+              Choose…
             </Button>
-          </div>
+          </Field>
         )}
       </Section>
       <Section title="Frame">
         <SliderField
           label="Padding"
+          hint="Space around the picture, as a share of its shorter side."
           value={bg.padding}
           min={0}
           max={0.3}
@@ -112,6 +123,7 @@ export function BackgroundControls({
         />
         <SliderField
           label="Corner radius"
+          hint="Rounds the picture's corners."
           value={bg.cornerRadius}
           min={0}
           max={0.1}
@@ -123,6 +135,7 @@ export function BackgroundControls({
       <Section title="Shadow">
         <SliderField
           label="Opacity"
+          hint="How dark the shadow under the picture is."
           value={bg.shadow.opacity}
           min={0}
           max={1}
@@ -133,6 +146,7 @@ export function BackgroundControls({
         />
         <SliderField
           label="Blur"
+          hint="How soft the shadow's edge is."
           value={bg.shadow.blur}
           min={0}
           max={0.15}
@@ -142,6 +156,7 @@ export function BackgroundControls({
         />
         <SliderField
           label="Offset"
+          hint="Moves the shadow down, or up below zero."
           value={bg.shadow.offsetY}
           min={-0.05}
           max={0.05}

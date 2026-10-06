@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     ActiveCapture, CaptureEvent, CaptureInfo, CaptureOptions, Error, EventHandler, OutputFiles,
-    Result, Track, even,
+    Rect, Result, Track, video_area,
 };
 
 /// Writes one audio track, creating the file once the first buffer reveals the format.
@@ -87,18 +87,71 @@ impl AudioSlot {
     }
 }
 
+/// A window recorded through a crop to whole pixels. If the window changes size, the
+/// crop would cut it off, so the stream switches to scaling the whole window into the
+/// video instead.
+struct Refit {
+    watch: ResizeWatch,
+    width: u32,
+    height: u32,
+    fps: u32,
+    system_audio: bool,
+}
+
+/// Reports, once, when a window's size differs from its size at the start.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ResizeWatch {
+    width: f64,
+    height: f64,
+    fired: bool,
+}
+
+impl ResizeWatch {
+    pub(super) fn new(width: f64, height: f64) -> Self {
+        Self {
+            width,
+            height,
+            fired: false,
+        }
+    }
+
+    pub(super) fn resized(&mut self, width: f64, height: f64) -> bool {
+        let changed = (width - self.width).abs() > 0.5 || (height - self.height).abs() > 0.5;
+        if changed && !self.fired {
+            self.fired = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// The window's size in points from a frame's `SCStreamFrameInfoScreenRect`.
+fn screen_size(buf: &cm::SampleBuf) -> Option<(f64, f64)> {
+    let attachments = buf.attaches(false)?;
+    if attachments.is_empty() {
+        return None;
+    }
+    let dict = attachments[0]
+        .get(sc::FrameInfo::screen_rect().as_cf())?
+        .try_as_dictionary()?;
+    let rect = cg::Rect::from_dictionary_representation(dict)?;
+    Some((rect.size.width, rect.size.height))
+}
+
 struct Shared {
     video: Mutex<Option<MediaWriter>>,
+    refit: Mutex<Option<Refit>>,
     video_failed: Mutex<bool>,
     system_audio: Mutex<Option<AudioSlot>>,
     on_event: EventHandler,
 }
 
 impl Shared {
-    fn on_video(&self, buf: &cm::SampleBuf) {
+    fn on_video(&self, stream: &sc::Stream, buf: &cm::SampleBuf) {
         if buf.image_buf().is_none() || !frame_complete(buf) {
             return;
         }
+        self.refit_if_resized(stream, buf);
         let mut guard = self.video.lock().expect("video lock");
         let Some(writer) = guard.as_mut() else {
             return;
@@ -118,6 +171,32 @@ impl Shared {
                     });
                 }
             }
+        }
+    }
+
+    fn refit_if_resized(&self, stream: &sc::Stream, buf: &cm::SampleBuf) {
+        let mut guard = self.refit.lock().expect("refit lock");
+        let Some(refit) = guard.as_mut() else {
+            return;
+        };
+        let Some((width, height)) = screen_size(buf) else {
+            return;
+        };
+        if refit.watch.resized(width, height) {
+            log::info!("the window was resized, scaling it into the video from now on");
+            let cfg = stream_cfg(
+                refit.width,
+                refit.height,
+                refit.fps,
+                None,
+                refit.system_audio,
+            );
+            stream.update_cfg_ch(&cfg, |error| {
+                if let Some(error) = error {
+                    log::warn!("cannot fit the resized window: {}", error.localized_desc());
+                }
+            });
+            *guard = None;
         }
     }
 
@@ -160,13 +239,13 @@ impl sc::StreamOutputImpl for StreamSink {
     extern "C" fn impl_stream_did_output_sample_buf(
         &mut self,
         _cmd: Option<&objc::Sel>,
-        _stream: &sc::Stream,
+        stream: &sc::Stream,
         sample_buf: &mut cm::SampleBuf,
         kind: sc::OutputType,
     ) {
         let shared = &self.inner().shared;
         match kind {
-            sc::OutputType::Screen => shared.on_video(sample_buf),
+            sc::OutputType::Screen => shared.on_video(stream, sample_buf),
             sc::OutputType::Audio => shared.on_audio(sample_buf),
             sc::OutputType::Mic => {}
         }
@@ -203,17 +282,71 @@ struct Plan {
     filter: arc::R<sc::ContentFilter>,
     info: CaptureInfo,
     src_rect: Option<cg::Rect>,
+    /// A cropped window's size in points, watched for resizes.
+    cropped_window: Option<(f64, f64)>,
+}
+
+fn stream_cfg(
+    width: u32,
+    height: u32,
+    fps: u32,
+    src_rect: Option<cg::Rect>,
+    system_audio: bool,
+) -> arc::R<sc::StreamCfg> {
+    let mut cfg = sc::StreamCfg::new();
+    cfg.set_width(width as usize);
+    cfg.set_height(height as usize);
+    cfg.set_minimum_frame_interval(cm::Time::new(1, fps as i32));
+    cfg.set_pixel_format(cv::PixelFormat::_420V);
+    cfg.set_shows_cursor(false);
+    cfg.set_queue_depth(6);
+    cfg.set_capture_resolution(sc::CaptureResolution::Best);
+    if let Some(rect) = src_rect {
+        cfg.set_src_rect(rect);
+    }
+    cfg.set_captures_audio(system_audio);
+    if system_audio {
+        cfg.set_sample_rate(48_000);
+        cfg.set_channel_count(2);
+        cfg.set_excludes_current_process_audio(true);
+    }
+    cfg
 }
 
 fn plan(content: &sc::ShareableContent, options: &CaptureOptions) -> Result<Plan> {
     let source = content::source(content, &options.target)?;
     let window = source.window.as_ref();
+    let requested = source.src_rect.map_or(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: source.width,
+            height: source.height,
+        },
+        content::rect,
+    );
+    let area = video_area(&requested, source.scale);
+    let src_rect = (source.src_rect.is_some() || area.rect != requested).then_some(cg::Rect {
+        origin: cg::Point {
+            x: area.rect.x,
+            y: area.rect.y,
+        },
+        size: cg::Size {
+            width: area.rect.width,
+            height: area.rect.height,
+        },
+    });
     Ok(Plan {
         info: CaptureInfo {
-            width: even(source.width * source.scale),
-            height: even(source.height * source.scale),
+            width: area.width,
+            height: area.height,
             scale_factor: source.scale,
-            bounds: source.bounds,
+            bounds: Rect {
+                x: source.bounds.x + area.rect.x - requested.x,
+                y: source.bounds.y + area.rect.y - requested.y,
+                width: area.rect.width,
+                height: area.rect.height,
+            },
             fps: options.fps.clamp(1, 120),
             codec: "hevc".into(),
             window_title: window.and_then(|w| w.title()).map(|t| t.to_string()),
@@ -221,8 +354,10 @@ fn plan(content: &sc::ShareableContent, options: &CaptureOptions) -> Result<Plan
                 .and_then(|w| w.owning_app())
                 .map(|a| a.app_name().to_string()),
         },
+        cropped_window: (window.is_some() && src_rect.is_some())
+            .then_some((source.width, source.height)),
         filter: source.filter,
-        src_rect: source.src_rect,
+        src_rect,
     })
 }
 
@@ -237,25 +372,15 @@ impl Recorder {
             filter,
             info,
             src_rect,
+            cropped_window,
         } = plan(&content, options)?;
-
-        let mut cfg = sc::StreamCfg::new();
-        cfg.set_width(info.width as usize);
-        cfg.set_height(info.height as usize);
-        cfg.set_minimum_frame_interval(cm::Time::new(1, info.fps as i32));
-        cfg.set_pixel_format(cv::PixelFormat::_420V);
-        cfg.set_shows_cursor(false);
-        cfg.set_queue_depth(6);
-        cfg.set_capture_resolution(sc::CaptureResolution::Best);
-        if let Some(rect) = src_rect {
-            cfg.set_src_rect(rect);
-        }
-        cfg.set_captures_audio(options.system_audio);
-        if options.system_audio {
-            cfg.set_sample_rate(48_000);
-            cfg.set_channel_count(2);
-            cfg.set_excludes_current_process_audio(true);
-        }
+        let cfg = stream_cfg(
+            info.width,
+            info.height,
+            info.fps,
+            src_rect,
+            options.system_audio,
+        );
 
         let shared = Arc::new(Shared {
             video: Mutex::new(Some(MediaWriter::hevc(
@@ -264,6 +389,13 @@ impl Recorder {
                 info.height,
                 info.fps,
             )?)),
+            refit: Mutex::new(cropped_window.map(|(width, height)| Refit {
+                watch: ResizeWatch::new(width, height),
+                width: info.width,
+                height: info.height,
+                fps: info.fps,
+                system_audio: options.system_audio,
+            })),
             video_failed: Mutex::new(false),
             system_audio: Mutex::new(
                 options
@@ -344,5 +476,20 @@ impl ActiveCapture for Recorder {
         audio?;
         mic?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResizeWatch;
+
+    #[test]
+    fn a_resize_is_reported_once() {
+        let mut watch = ResizeWatch::new(401.0, 301.0);
+        assert!(!watch.resized(401.0, 301.0));
+        assert!(!watch.resized(401.2, 300.9), "rounding is not a resize");
+        assert!(watch.resized(801.0, 601.0));
+        assert!(!watch.resized(801.0, 601.0));
+        assert!(!watch.resized(401.0, 301.0));
     }
 }

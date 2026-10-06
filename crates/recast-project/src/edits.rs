@@ -219,16 +219,29 @@ pub enum SoundPack {
     SoftTap,
     MouseClick,
     Mechanical,
+    TrackpadTap,
+    Pop,
+    Tick,
 }
 
 impl SoundPack {
-    pub const ALL: [SoundPack; 3] = [Self::SoftTap, Self::MouseClick, Self::Mechanical];
+    pub const ALL: [SoundPack; 6] = [
+        Self::MouseClick,
+        Self::SoftTap,
+        Self::Mechanical,
+        Self::TrackpadTap,
+        Self::Pop,
+        Self::Tick,
+    ];
 
     pub fn id(self) -> &'static str {
         match self {
             Self::SoftTap => "soft-tap",
             Self::MouseClick => "mouse-click",
             Self::Mechanical => "mechanical",
+            Self::TrackpadTap => "trackpad-tap",
+            Self::Pop => "pop",
+            Self::Tick => "tick",
         }
     }
 }
@@ -288,10 +301,13 @@ pub enum Codec {
     Hevc,
 }
 
-/// The output's shorter side.
+/// The output size: the recording at its own pixel size, or a preset for the output's
+/// shorter side.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 pub enum Resolution {
     #[default]
+    #[serde(rename = "auto")]
+    Auto,
     #[serde(rename = "1080p")]
     P1080,
     #[serde(rename = "1440p")]
@@ -301,11 +317,13 @@ pub enum Resolution {
 }
 
 impl Resolution {
-    pub fn short_side(self) -> u32 {
+    /// The preset's shorter side; `None` for `Auto`.
+    pub fn short_side(self) -> Option<u32> {
         match self {
-            Self::P1080 => 1080,
-            Self::P1440 => 1440,
-            Self::P2160 => 2160,
+            Self::Auto => None,
+            Self::P1080 => Some(1080),
+            Self::P1440 => Some(1440),
+            Self::P2160 => Some(2160),
         }
     }
 }
@@ -342,7 +360,7 @@ impl Default for ExportSettings {
     fn default() -> Self {
         Self {
             codec: Codec::H264,
-            resolution: Resolution::P1080,
+            resolution: Resolution::Auto,
             fps: FrameRate::Fps60,
             quality: 0.7,
         }
@@ -473,7 +491,7 @@ mod tests {
         assert_eq!(json["background"]["fill"]["kind"], "gradient");
         assert_eq!(json["background"]["fill"]["angleDeg"], 135.0);
         assert_eq!(json["export"]["codec"], "h264");
-        assert_eq!(json["export"]["resolution"], "1080p");
+        assert_eq!(json["export"]["resolution"], "auto");
         assert_eq!(json["export"]["fps"], "60");
         assert_eq!(json["sounds"]["pack"], "mouseClick");
         assert_eq!(json["zoom"]["auto"], true);

@@ -25,17 +25,32 @@ export function Section({
   );
 }
 
+/** The short explanation under an option's label. */
+export function Hint({ children }: { children: ReactNode }) {
+  return (
+    <p data-slot="hint" className="text-muted-foreground text-xs">
+      {children}
+    </p>
+  );
+}
+
+/** An option with its label and hint on the left and its control on the right. */
 export function Field({
   label,
+  hint,
   children,
 }: {
   label: string;
+  hint: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <Label className="text-sm font-normal">{label}</Label>
-      {children}
+    <div data-slot="field" className="flex items-start justify-between gap-3">
+      <div className="min-w-0 space-y-0.5 pt-1">
+        <Label className="text-sm font-normal">{label}</Label>
+        <Hint>{hint}</Hint>
+      </div>
+      <div className="flex shrink-0 items-center gap-1">{children}</div>
     </div>
   );
 }
@@ -43,6 +58,7 @@ export function Field({
 /** A slider whose drag is one undo step. */
 export function SliderField({
   label,
+  hint,
   value,
   min,
   max,
@@ -52,6 +68,7 @@ export function SliderField({
   onChange,
 }: {
   label: string;
+  hint: ReactNode;
   value: number;
   min: number;
   max: number;
@@ -62,12 +79,15 @@ export function SliderField({
 }) {
   const { begin, end } = useContext(GestureContext);
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <Label className="text-sm font-normal">{label}</Label>
-        <span className="text-muted-foreground font-mono text-xs tabular-nums">
-          {format(value)}
-        </span>
+    <div data-slot="field" className="space-y-2">
+      <div className="space-y-0.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-sm font-normal">{label}</Label>
+          <span className="text-muted-foreground font-mono text-xs tabular-nums">
+            {format(value)}
+          </span>
+        </div>
+        <Hint>{hint}</Hint>
       </div>
       <Slider
         value={[value]}
@@ -87,18 +107,21 @@ export function SliderField({
 
 export function SwitchField({
   label,
+  hint,
   checked,
   disabled,
   onChange,
 }: {
   label: string;
+  hint: ReactNode;
   checked: boolean;
   disabled?: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <Field label={label}>
+    <Field label={label} hint={hint}>
       <Switch
+        aria-label={label}
         checked={checked}
         disabled={disabled}
         onCheckedChange={onChange}
@@ -108,29 +131,40 @@ export function SwitchField({
 }
 
 export function Choice<T extends string>({
+  label,
+  hint,
   value,
   options,
   onChange,
 }: {
+  label: string;
+  hint: ReactNode;
   value: T;
   options: { value: T; label: ReactNode }[];
   onChange: (value: T) => void;
 }) {
   return (
-    <ToggleGroup
-      type="single"
-      variant="outline"
-      size="sm"
-      className="w-full"
-      value={value}
-      onValueChange={(v) => v && onChange(v as T)}
-    >
-      {options.map((o) => (
-        <ToggleGroupItem key={o.value} value={o.value} className="flex-1">
-          {o.label}
-        </ToggleGroupItem>
-      ))}
-    </ToggleGroup>
+    <div data-slot="field" className="space-y-2">
+      <div className="space-y-0.5">
+        <Label className="text-sm font-normal">{label}</Label>
+        <Hint>{hint}</Hint>
+      </div>
+      <ToggleGroup
+        aria-label={label}
+        type="single"
+        variant="outline"
+        size="sm"
+        className="w-full"
+        value={value}
+        onValueChange={(v) => v && onChange(v as T)}
+      >
+        {options.map((o) => (
+          <ToggleGroupItem key={o.value} value={o.value} className="flex-1">
+            {o.label}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
   );
 }
 
@@ -140,10 +174,12 @@ export function Choice<T extends string>({
  */
 export function ColorField({
   label,
+  hint,
   value,
   onChange,
 }: {
   label: string;
+  hint: ReactNode;
   value: string;
   onChange: (value: string) => void;
 }) {
@@ -163,7 +199,7 @@ export function ColorField({
   }, [end]);
 
   return (
-    <Field label={label}>
+    <Field label={label} hint={hint}>
       <input
         ref={input}
         type="color"

@@ -147,16 +147,44 @@ pub fn platform() -> impl ScreenCapture {
     macos::MacCapture
 }
 
-/// HEVC bitrate for the raw recording, kept high because it is re-encoded on export.
+/// HEVC bitrate for the raw recording. It is re-encoded on export, and screen text
+/// only stays sharp with enough bits for the first frame and every big change.
 pub fn video_bitrate(width: u32, height: u32, fps: u32) -> u32 {
-    let bits = width as f64 * height as f64 * fps as f64 * 0.12;
-    bits.clamp(10_000_000.0, 160_000_000.0) as u32
+    let bits = width as f64 * height as f64 * fps as f64 * 0.2;
+    bits.clamp(20_000_000.0, 240_000_000.0) as u32
 }
 
-/// Rounds a pixel size down to an even number, as 4:2:0 video requires.
-pub fn even(value: f64) -> u32 {
-    let v = value.round().max(2.0) as u32;
-    v - v % 2
+/// An area of the screen that ScreenCaptureKit delivers without scaling.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VideoArea {
+    /// In points, on whole pixels.
+    pub rect: Rect,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// The part of `rect` (points) that maps 1:1 to video pixels at `scale`. 4:2:0 video
+/// needs even sizes, so an odd size loses its last pixel column or row: any other output
+/// size makes ScreenCaptureKit resample, and that blurs every pixel.
+pub fn video_area(rect: &Rect, scale: f64) -> VideoArea {
+    let px = |v: f64| (v * scale).round();
+    let (x, y) = (px(rect.x), px(rect.y));
+    let even = |size: f64| {
+        let size = size.max(2.0) as u32;
+        size - size % 2
+    };
+    let width = even(px(rect.x + rect.width) - x);
+    let height = even(px(rect.y + rect.height) - y);
+    VideoArea {
+        rect: Rect {
+            x: x / scale,
+            y: y / scale,
+            width: width as f64 / scale,
+            height: height as f64 / scale,
+        },
+        width,
+        height,
+    }
 }
 
 pub fn check_region(display: &Rect, region: &Rect) -> Result<()> {
@@ -180,18 +208,64 @@ pub fn check_region(display: &Rect, region: &Rect) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     #[test]
-    fn even_rounds_down_to_even() {
-        assert_eq!(even(1919.6), 1920);
-        assert_eq!(even(1081.0), 1080);
-        assert_eq!(even(0.2), 2);
+    fn video_area_keeps_even_pixel_sizes() {
+        let area = video_area(&rect(864.0, 216.0, 1368.0, 954.0), 1.0);
+        assert_eq!((area.width, area.height), (1368, 954));
+        assert_eq!(area.rect, rect(864.0, 216.0, 1368.0, 954.0));
+        let area = video_area(&rect(0.0, 0.0, 1728.0, 1117.0), 2.0);
+        assert_eq!((area.width, area.height), (3456, 2234));
+    }
+
+    #[test]
+    fn video_area_crops_odd_pixel_sizes_instead_of_scaling() {
+        let area = video_area(&rect(864.0, 216.0, 1369.0, 955.0), 1.0);
+        assert_eq!((area.width, area.height), (1368, 954));
+        assert_eq!(area.rect, rect(864.0, 216.0, 1368.0, 954.0));
+
+        let area = video_area(&rect(10.5, 20.0, 300.5, 200.0), 2.0);
+        assert_eq!((area.width, area.height), (600, 400));
+        assert_eq!(area.rect, rect(10.5, 20.0, 300.0, 200.0));
+
+        let area = video_area(&rect(0.0, 0.0, 1920.0, 1081.0), 1.0);
+        assert_eq!((area.width, area.height), (1920, 1080));
+    }
+
+    #[test]
+    fn video_area_maps_points_to_whole_pixels() {
+        for scale in [1.0, 1.5, 2.0, 3.0] {
+            for i in 0..200 {
+                let r = rect(
+                    i as f64 * 1.37,
+                    i as f64 * 0.71,
+                    40.0 + i as f64 * 3.3,
+                    31.7 + i as f64,
+                );
+                let area = video_area(&r, scale);
+                assert_eq!(area.width % 2, 0);
+                assert_eq!(area.height % 2, 0);
+                assert!((area.rect.width * scale - area.width as f64).abs() < 1e-9);
+                assert!((area.rect.height * scale - area.height as f64).abs() < 1e-9);
+                assert!(((area.rect.x * scale).round() - area.rect.x * scale).abs() < 1e-9);
+                assert!(area.rect.x + area.rect.width <= r.x + r.width + 0.5 / scale + 1e-9);
+            }
+        }
     }
 
     #[test]
     fn bitrate_is_clamped() {
-        assert_eq!(video_bitrate(320, 240, 60), 10_000_000);
-        assert_eq!(video_bitrate(3024, 1964, 60), 42_761_779);
-        assert_eq!(video_bitrate(7680, 4320, 60), 160_000_000);
+        assert_eq!(video_bitrate(320, 240, 60), 20_000_000);
+        assert_eq!(video_bitrate(3024, 1964, 60), 71_269_632);
+        assert_eq!(video_bitrate(7680, 4320, 60), 240_000_000);
     }
 
     #[test]

@@ -89,6 +89,8 @@ export const commands = {
 	 */
 	exportStart: (outputPath: string) => typedError<null, string>(__TAURI_INVOKE("export_start", { outputPath })),
 	exportCancel: () => typedError<null, string>(__TAURI_INVOKE("export_cancel")),
+	/**  A WAV file with the pack's click sound, for previewing it. */
+	clickSoundPreview: (pack: SoundPack) => __TAURI_INVOKE<number[]>("click_sound_preview", { pack }),
 };
 
 /** Events */
@@ -344,8 +346,11 @@ export type Rect = {
 	height: number | null,
 };
 
-/**  The output's shorter side. */
-export type Resolution = "1080p" | "1440p" | "4k";
+/**
+ *  The output size: the recording at its own pixel size, or a preset for the output's
+ *  shorter side.
+ */
+export type Resolution = "auto" | "1080p" | "1440p" | "4k";
 
 export type ScreenshotSettings = {
 	copyToClipboard?: boolean,
@@ -394,7 +399,7 @@ export type ShortcutStatus = {
 	error: string | null,
 };
 
-export type SoundPack = "softTap" | "mouseClick" | "mechanical";
+export type SoundPack = "softTap" | "mouseClick" | "mechanical" | "trackpadTap" | "pop" | "tick";
 
 export type SoundSettings = {
 	enabled?: boolean,

@@ -55,13 +55,52 @@ fn background(p: vec2f) -> vec3f {
     return textureSampleLevel(bg_tex, linear_sampler, p / canvas, 0.0).rgb;
 }
 
-// Box-filters the screen over the area one output pixel covers, so downscaled text stays legible.
+// Catmull-Rom weights for the texels at offsets -1, 0, 1 and 2 from a sample `t` past texel 0.
+fn catmull_rom(t: f32) -> vec4f {
+    return vec4f(
+        t * (-0.5 + t * (1.0 - 0.5 * t)),
+        1.0 + t * t * (-2.5 + 1.5 * t),
+        t * (0.5 + t * (2.0 - 1.5 * t)),
+        t * t * (-0.5 + 0.5 * t),
+    );
+}
+
+// Bicubic Catmull-Rom, kept within the four nearest texels so edges get no halos.
+fn sample_bicubic(uv: vec2f) -> vec4f {
+    let size = u.source.xy;
+    let pos = uv * size - 0.5;
+    let base = floor(pos);
+    let wx = catmull_rom(pos.x - base.x);
+    let wy = catmull_rom(pos.y - base.y);
+    let last = vec2i(size) - 1;
+    var sum = vec4f(0.0);
+    var low = vec4f(1.0);
+    var high = vec4f(0.0);
+    for (var j = 0; j < 4; j++) {
+        for (var i = 0; i < 4; i++) {
+            let texel = clamp(vec2i(base) + vec2i(i - 1, j - 1), vec2i(0), last);
+            let color = textureLoad(screen_tex, texel, 0);
+            sum += color * wx[i] * wy[j];
+            if (i == 1 || i == 2) && (j == 1 || j == 2) {
+                low = min(low, color);
+                high = max(high, color);
+            }
+        }
+    }
+    return clamp(sum, low, high);
+}
+
+// Enlarges the screen with a bicubic filter and box-filters it over the area one output
+// pixel covers when it is smaller, so text stays legible both ways.
 fn sample_screen(uv: vec2f) -> vec4f {
     let texels_per_pixel = u.view.zw * u.source.xy / u.content_size.xy;
+    let most = max(texels_per_pixel.x, texels_per_pixel.y);
     // The tolerance keeps a 1:1 mapping off by float rounding at a single tap.
-    let taps = clamp(ceil(max(texels_per_pixel.x, texels_per_pixel.y) - 1e-3), 1.0, 4.0);
+    let taps = clamp(ceil(most - 1e-3), 1.0, 4.0);
     var color: vec4f;
-    if taps <= 1.0 {
+    if most < 1.0 - 1e-3 {
+        color = sample_bicubic(uv);
+    } else if taps <= 1.0 {
         color = textureSampleLevel(screen_tex, linear_sampler, uv, 0.0);
     } else {
         let footprint = texels_per_pixel / u.source.xy;

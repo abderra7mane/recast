@@ -5,19 +5,8 @@ use std::path::Path;
 
 use recast_project::{BackgroundFill, BackgroundSettings, EditSettings, EventLog, Rect};
 
+pub use crate::layout::{native_size, padding_pixels};
 use crate::{Compositor, CpuFrame, PixelFormat, Result, Scene, SceneParts, bitmap::Rgba};
-
-/// `padding` (a fraction of the shorter side) in whole pixels for a `width × height` image.
-pub fn padding_pixels(width: u32, height: u32, padding: f64) -> u32 {
-    (padding.clamp(0.0, 0.5) * width.min(height) as f64).round() as u32
-}
-
-/// Frame size that shows a `width × height` pixel image at its own size, with `padding`
-/// (a fraction of its shorter side, rounded to whole pixels) around it.
-pub fn native_size(width: u32, height: u32, padding: f64) -> (u32, u32) {
-    let pad = padding_pixels(width, height, padding);
-    (width + 2 * pad, height + 2 * pad)
-}
 
 /// `size` scaled down to fit `max_width × max_height`, keeping its aspect ratio.
 pub fn fit(size: (u32, u32), max_width: u32, max_height: u32) -> (u32, u32) {
@@ -74,15 +63,8 @@ impl StillRenderer {
         width: u32,
         height: u32,
     ) -> Result<Vec<u8>> {
-        let (image_w, image_h) = (self.image.width, self.image.height);
-        // The padding the frame size was made with, so the image lands on whole pixels
-        // at its own size instead of being resampled.
         let mut settings = EditSettings {
-            background: BackgroundSettings {
-                padding: padding_pixels(image_w, image_h, background.padding) as f64
-                    / image_w.min(image_h) as f64,
-                ..background.clone()
-            },
+            background: background.clone(),
             ..Default::default()
         };
         settings.zoom.auto = false;
@@ -108,6 +90,7 @@ impl StillRenderer {
                     width: self.image.width as f64,
                     height: self.image.height as f64,
                 },
+                video_size: (self.image.width, self.image.height),
                 duration_ms: 0.0,
                 events: &EventLog::default(),
                 settings,

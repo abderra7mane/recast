@@ -61,6 +61,9 @@ pub fn bundled(pack: SoundPack, kind: SoundKind) -> &'static [u8] {
         SoundPack::SoftTap => pack_files!("soft-tap"),
         SoundPack::MouseClick => pack_files!("mouse-click"),
         SoundPack::Mechanical => pack_files!("mechanical"),
+        SoundPack::TrackpadTap => pack_files!("trackpad-tap"),
+        SoundPack::Pop => pack_files!("pop"),
+        SoundPack::Tick => pack_files!("tick"),
     };
     let index = SoundKind::ALL
         .iter()
@@ -191,6 +194,9 @@ struct Voice {
     brightness: f64,
     /// A second, quieter hit after this many seconds (switch bottoming out).
     echo: Option<(f64, f64)>,
+    /// The partials start at this multiple of their frequency and glide to it with
+    /// this time constant in seconds, like a bubble popping.
+    glide: Option<(f64, f64)>,
 }
 
 const LENGTH_SECONDS: f64 = 0.12;
@@ -210,8 +216,12 @@ fn render(voice: &Voice, pitch: f64, gain: f64, seed: u32) -> Vec<f64> {
             previous_in = n;
             previous_out = high;
             let mut v = high * voice.noise.1 * (-t / voice.noise.0).exp();
+            let cycles = match voice.glide {
+                Some((from, seconds)) => t + (from - 1.0) * seconds * (1.0 - (-t / seconds).exp()),
+                None => t,
+            };
             for (frequency, decay, amplitude) in voice.partials {
-                let phase = std::f64::consts::TAU * frequency * pitch * t;
+                let phase = std::f64::consts::TAU * frequency * pitch * cycles;
                 v += phase.sin() * amplitude * (-t / decay).exp();
             }
             *sample += v * level;
@@ -234,16 +244,22 @@ fn render(voice: &Voice, pitch: f64, gain: f64, seed: u32) -> Vec<f64> {
 /// The 16-bit mono samples of one bundled sound.
 pub fn synthesize(pack: SoundPack, kind: SoundKind) -> Vec<i16> {
     const SOFT_DOWN: Voice = Voice {
-        partials: &[(150.0, 0.028, 0.55), (310.0, 0.014, 0.25)],
-        noise: (0.006, 0.35),
-        brightness: 0.35,
+        partials: &[
+            (190.0, 0.03, 0.4),
+            (640.0, 0.018, 0.35),
+            (1_350.0, 0.008, 0.15),
+        ],
+        noise: (0.004, 0.3),
+        brightness: 0.45,
         echo: None,
+        glide: None,
     };
     const SOFT_UP: Voice = Voice {
-        partials: &[(210.0, 0.016, 0.35), (420.0, 0.009, 0.15)],
-        noise: (0.004, 0.2),
-        brightness: 0.35,
+        partials: &[(260.0, 0.016, 0.25), (820.0, 0.01, 0.25)],
+        noise: (0.003, 0.2),
+        brightness: 0.45,
         echo: None,
+        glide: None,
     };
     const CLICK_DOWN: Voice = Voice {
         partials: &[
@@ -254,12 +270,14 @@ pub fn synthesize(pack: SoundPack, kind: SoundKind) -> Vec<i16> {
         noise: (0.0025, 0.9),
         brightness: 0.9,
         echo: None,
+        glide: None,
     };
     const CLICK_UP: Voice = Voice {
         partials: &[(2_600.0, 0.008, 0.25), (4_200.0, 0.006, 0.18)],
         noise: (0.002, 0.6),
         brightness: 0.92,
         echo: None,
+        glide: None,
     };
     const MECHANICAL_DOWN: Voice = Voice {
         partials: &[
@@ -270,12 +288,61 @@ pub fn synthesize(pack: SoundPack, kind: SoundKind) -> Vec<i16> {
         noise: (0.002, 0.8),
         brightness: 0.85,
         echo: Some((0.007, 0.6)),
+        glide: None,
     };
     const MECHANICAL_UP: Voice = Voice {
         partials: &[(1_400.0, 0.03, 0.2), (380.0, 0.02, 0.3)],
         noise: (0.0018, 0.6),
         brightness: 0.85,
         echo: None,
+        glide: None,
+    };
+
+    const TRACKPAD_DOWN: Voice = Voice {
+        partials: &[
+            (330.0, 0.012, 0.5),
+            (1_750.0, 0.005, 0.3),
+            (3_100.0, 0.003, 0.12),
+        ],
+        noise: (0.0015, 0.35),
+        brightness: 0.6,
+        echo: None,
+        glide: None,
+    };
+    const TRACKPAD_UP: Voice = Voice {
+        partials: &[(420.0, 0.008, 0.35), (2_100.0, 0.004, 0.2)],
+        noise: (0.001, 0.25),
+        brightness: 0.6,
+        echo: None,
+        glide: None,
+    };
+    const POP_DOWN: Voice = Voice {
+        partials: &[(720.0, 0.03, 0.6), (1_440.0, 0.012, 0.12)],
+        noise: (0.001, 0.15),
+        brightness: 0.7,
+        echo: None,
+        glide: Some((0.55, 0.01)),
+    };
+    const POP_UP: Voice = Voice {
+        partials: &[(1_050.0, 0.02, 0.45), (2_100.0, 0.008, 0.1)],
+        noise: (0.001, 0.1),
+        brightness: 0.7,
+        echo: None,
+        glide: Some((0.6, 0.008)),
+    };
+    const TICK_DOWN: Voice = Voice {
+        partials: &[(5_200.0, 0.004, 0.3), (7_900.0, 0.0025, 0.18)],
+        noise: (0.0008, 0.5),
+        brightness: 0.97,
+        echo: None,
+        glide: None,
+    };
+    const TICK_UP: Voice = Voice {
+        partials: &[(6_300.0, 0.003, 0.22)],
+        noise: (0.0006, 0.35),
+        brightness: 0.97,
+        echo: None,
+        glide: None,
     };
 
     let (voice, gain) = match (pack, kind) {
@@ -287,6 +354,14 @@ pub fn synthesize(pack: SoundPack, kind: SoundKind) -> Vec<i16> {
             (&MECHANICAL_DOWN, 0.75)
         }
         (SoundPack::Mechanical, _) => (&MECHANICAL_UP, 0.5),
+        (SoundPack::TrackpadTap, SoundKind::LeftDown | SoundKind::RightDown) => {
+            (&TRACKPAD_DOWN, 0.75)
+        }
+        (SoundPack::TrackpadTap, _) => (&TRACKPAD_UP, 0.5),
+        (SoundPack::Pop, SoundKind::LeftDown | SoundKind::RightDown) => (&POP_DOWN, 0.7),
+        (SoundPack::Pop, _) => (&POP_UP, 0.5),
+        (SoundPack::Tick, SoundKind::LeftDown | SoundKind::RightDown) => (&TICK_DOWN, 0.6),
+        (SoundPack::Tick, _) => (&TICK_UP, 0.45),
     };
     let right = matches!(kind, SoundKind::RightDown | SoundKind::RightUp);
     let pitch = match (pack, right) {
@@ -299,6 +374,14 @@ pub fn synthesize(pack: SoundPack, kind: SoundKind) -> Vec<i16> {
         .into_iter()
         .map(|v| (v.clamp(-1.0, 1.0) * i16::MAX as f64).round() as i16)
         .collect()
+}
+
+/// A WAV file with a pack's left-button press, then its release, for previewing it.
+pub fn preview(pack: SoundPack) -> Vec<u8> {
+    let mut samples = synthesize(pack, SoundKind::LeftDown);
+    samples.resize(samples.len() + SAMPLE_RATE as usize / 40, 0);
+    samples.extend(synthesize(pack, SoundKind::LeftUp));
+    wav(&samples)
 }
 
 /// A 16-bit mono PCM WAV file.
@@ -363,6 +446,51 @@ mod tests {
                 seen.push(samples);
             }
         }
+    }
+
+    /// Loudest 5 ms RMS level in dBFS of the part above about 400 Hz, what laptop
+    /// speakers play.
+    fn audible_level(samples: &[i16]) -> f64 {
+        let k = (-std::f64::consts::TAU * 400.0 / SAMPLE_RATE as f64).exp();
+        let mut stages = [(0.0, 0.0); 2];
+        let high: Vec<f64> = samples
+            .iter()
+            .map(|s| {
+                let mut x = *s as f64 / 32768.0;
+                for (previous_in, previous_out) in &mut stages {
+                    let y = k * (*previous_out + x - *previous_in);
+                    *previous_in = x;
+                    *previous_out = y;
+                    x = y;
+                }
+                x
+            })
+            .collect();
+        let window = SAMPLE_RATE as usize / 200;
+        high.windows(window)
+            .step_by(window / 4)
+            .map(|w| 10.0 * (w.iter().map(|x| x * x).sum::<f64>() / window as f64).log10())
+            .fold(f64::MIN, f64::max)
+    }
+
+    #[test]
+    fn every_pack_is_audible_on_laptop_speakers() {
+        for pack in SoundPack::ALL {
+            for kind in SoundKind::ALL {
+                let level = audible_level(&synthesize(pack, kind));
+                assert!(level > -32.0, "{pack:?} {kind:?}: {level:.1} dB");
+            }
+        }
+    }
+
+    #[test]
+    fn preview_plays_press_then_release() {
+        let down = synthesize(SoundPack::Pop, SoundKind::LeftDown);
+        let preview = decode(&preview(SoundPack::Pop), "wav").unwrap();
+        let up_starts = down.len() + SAMPLE_RATE as usize / 40;
+        let up = synthesize(SoundPack::Pop, SoundKind::LeftUp);
+        assert_eq!(preview.len(), (up_starts + up.len()) * 2);
+        assert!((preview[2 * up_starts + 200] - up[100] as f32 / 32768.0).abs() < 1e-4);
     }
 
     #[test]

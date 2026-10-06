@@ -117,14 +117,13 @@ unsafe impl Send for MediaWriter {}
 
 impl MediaWriter {
     pub fn hevc(path: &Path, width: u32, height: u32, fps: u32) -> Result<Self> {
-        let mut compression = ns::DictionaryMut::<ns::String, ns::Id>::with_capacity(5);
+        // No ExpectedFrameRate: screen capture only sends frames on changes, and with that
+        // hint the encoder starves the first frame, which then stays blurry while the
+        // screen is still.
+        let mut compression = ns::DictionaryMut::<ns::String, ns::Id>::with_capacity(4);
         compression.insert(
             ns::str!(c"AverageBitRate"),
             ns::Number::with_u32(video_bitrate(width, height, fps)).as_id_ref(),
-        );
-        compression.insert(
-            ns::str!(c"ExpectedFrameRate"),
-            ns::Number::with_u32(fps).as_id_ref(),
         );
         compression.insert(
             ns::str!(c"MaxKeyFrameIntervalDuration"),
@@ -443,6 +442,90 @@ mod tests {
             (3008.0..3100.0).contains(&audio.duration_ms()),
             "{summary:?}"
         );
+    }
+
+    /// Decodes the luma plane of every frame of a video file.
+    fn decode_luma(path: &std::path::Path, width: usize, height: usize) -> Vec<Vec<u8>> {
+        use cidre::{av, cv, ns};
+        let url = ns::Url::with_fs_path_str(&path.to_string_lossy(), false);
+        let asset = av::UrlAsset::with_url(&url, None).unwrap();
+        let tracks =
+            crate::macos::block_on(asset.load_tracks_with_media_type(av::MediaType::video()))
+                .unwrap();
+        let track = tracks.get(0).unwrap();
+        let mut settings = ns::DictionaryMut::<ns::String, ns::Id>::with_capacity(1);
+        settings.insert(
+            cv::pixel_buffer_keys::pixel_format().as_ns(),
+            ns::Number::with_u32(cv::PixelFormat::_420V.0).as_id_ref(),
+        );
+        let mut reader = av::AssetReader::with_asset(&asset).unwrap();
+        let mut output = av::AssetReaderTrackOutput::with_track(&track, Some(&settings)).unwrap();
+        reader.add_output(&output).unwrap();
+        assert!(reader.start_reading().unwrap());
+        let mut frames = Vec::new();
+        while let Some(buf) = output.next_sample_buf().unwrap() {
+            let mut pixels = buf.image_buf().unwrap().retained();
+            let flags = cv::pixel_buffer::LockFlags::READ_ONLY;
+            unsafe { pixels.lock_base_addr(flags) }.result().unwrap();
+            let stride = pixels.plane_bytes_per_row(0);
+            let base = pixels.plane_base_address(0);
+            let mut luma = Vec::with_capacity(width * height);
+            for y in 0..height {
+                // SAFETY: the plane is locked and holds `stride` bytes per row.
+                luma.extend_from_slice(unsafe {
+                    std::slice::from_raw_parts(base.add(y * stride), width)
+                });
+            }
+            let _ = unsafe { pixels.unlock_lock_base_addr(flags) };
+            frames.push(luma);
+        }
+        frames
+    }
+
+    fn psnr(a: &[u8], b: &[u8]) -> f64 {
+        let mse = a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| (*x as f64 - *y as f64).powi(2))
+            .sum::<f64>()
+            / a.len() as f64;
+        10.0 * (255.0f64.powi(2) / mse.max(1e-9)).log10()
+    }
+
+    /// Records screen text the way ScreenCaptureKit delivers it, a frame only when
+    /// something changes, and returns the PSNR of the first and the last frame.
+    fn screen_text_psnr(width: usize, height: usize) -> (f64, f64) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("screen.mp4");
+        let mut writer = MediaWriter::hevc(&path, width as u32, height as u32, 60).unwrap();
+        let start = cm::Clock::host_time_clock().time();
+        let mut sources = Vec::new();
+        let mut t = 0.0;
+        for i in 0..30 {
+            let luma = synthetic::text_luma(width, height, i);
+            let pts = start.add(cm::Time::with_secs(t, 6000));
+            let buf = synthetic::luma_frame(width, height, &luma, pts).unwrap();
+            wait_ready(&writer);
+            writer.append(&buf).unwrap();
+            sources.push(luma);
+            t += if i % 5 == 0 { 0.6 } else { 0.1 };
+        }
+        assert_eq!(writer.dropped(), 0);
+        let stop = start.add(cm::Time::with_secs(t, 6000));
+        assert!(writer.finish_at(Some(stop)).unwrap());
+        let decoded = decode_luma(&path, width, height);
+        let last = sources.len() - 1;
+        (
+            psnr(&sources[0], &decoded[0]),
+            psnr(&sources[last], &decoded[last]),
+        )
+    }
+
+    #[test]
+    fn screen_text_stays_sharp() {
+        let (first, last) = screen_text_psnr(1368, 954);
+        assert!(first > 44.0, "first frame {first:.1} dB");
+        assert!(last > 55.0, "last frame {last:.1} dB");
     }
 
     #[test]

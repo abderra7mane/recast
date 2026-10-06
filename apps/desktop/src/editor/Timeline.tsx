@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { usePlayback, seek, playbackStore } from "@/editor/playback";
 import { formatTime, type Segment } from "@/editor/settings";
 import { editorStore, useEditor, visibleSegments } from "@/editor/store";
+import { Tip } from "@/editor/Tip";
 import {
   fitScale,
   moveSegment,
@@ -188,34 +189,44 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
           {auto ? "Auto zoom" : "Manual zoom"} · {segments.length} segment
           {segments.length === 1 ? "" : "s"}
         </span>
+        <span className="text-muted-foreground truncate text-xs">
+          · Drag the clip's ends to trim. Double-click the zoom track to add a
+          zoom.
+        </span>
         <div className="ml-auto flex items-center gap-1">
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            aria-label="Zoom timeline out"
-            onClick={() => zoom(1 / 1.5)}
-          >
-            <ZoomOut />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            aria-label="Zoom timeline in"
-            onClick={() => zoom(1.5)}
-          >
-            <ZoomIn />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7"
-            aria-label="Fit timeline"
-            onClick={() => setFitted(true)}
-          >
-            <Maximize2 />
-          </Button>
+          <Tip label="Zoom the timeline out (⌘ scroll)">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-7"
+              aria-label="Zoom timeline out"
+              onClick={() => zoom(1 / 1.5)}
+            >
+              <ZoomOut />
+            </Button>
+          </Tip>
+          <Tip label="Zoom the timeline in (⌘ scroll)">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-7"
+              aria-label="Zoom timeline in"
+              onClick={() => zoom(1.5)}
+            >
+              <ZoomIn />
+            </Button>
+          </Tip>
+          <Tip label="Fit the whole recording">
+            <Button
+              size="icon"
+              variant="ghost"
+              className="size-7"
+              aria-label="Fit timeline"
+              onClick={() => setFitted(true)}
+            >
+              <Maximize2 />
+            </Button>
+          </Tip>
         </div>
       </div>
       <div
@@ -283,6 +294,7 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
                 key={edge}
                 role="slider"
                 aria-label={`Trim ${edge}`}
+                title={`Drag to trim the ${edge}`}
                 aria-valuenow={edge === "start" ? trimStart : trimEnd}
                 className="absolute inset-y-0 z-10 w-2.5 cursor-ew-resize rounded-sm bg-sky-300 hover:bg-white"
                 style={{

@@ -181,6 +181,7 @@ fn fixture_with_cursor(settings: EditSettings, cursor: Option<CursorImage>) -> S
             width: SCREEN_W as f64,
             height: SCREEN_H as f64,
         },
+        video_size: (SCREEN_W, SCREEN_H),
         duration_ms: 6_000.0,
         events: &events,
         settings,
@@ -525,4 +526,155 @@ fn beautify_at_native_size_is_pixel_exact_with_padding() {
             "{width}×{height} with padding {padding}: {blurred} pixels resampled"
         );
     }
+}
+
+/// Black-on-white strokes one to three pixels wide, like small text.
+fn strokes(width: u32, height: u32) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let ink = (x % 7 < 1 + y / 20 % 3) || (y % 9 == 0 && x % 23 < 15);
+            let v = if ink { 20 } else { 240 };
+            pixels.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    pixels
+}
+
+/// Bilinear enlargement by 2, sampling at output pixel centers like a GPU sampler.
+fn bilinear_2x(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let at = |x: i64, y: i64| {
+        let x = x.clamp(0, width as i64 - 1) as u32;
+        let y = y.clamp(0, height as i64 - 1) as u32;
+        pixels[((y * width + x) * 4) as usize] as f64
+    };
+    let mut out = Vec::with_capacity((width * height * 16) as usize);
+    for oy in 0..height * 2 {
+        for ox in 0..width * 2 {
+            let (sx, sy) = ((ox as f64 + 0.5) / 2.0 - 0.5, (oy as f64 + 0.5) / 2.0 - 0.5);
+            let (x0, y0) = (sx.floor(), sy.floor());
+            let (fx, fy) = (sx - x0, sy - y0);
+            let (x0, y0) = (x0 as i64, y0 as i64);
+            let top = at(x0, y0) * (1.0 - fx) + at(x0 + 1, y0) * fx;
+            let bottom = at(x0, y0 + 1) * (1.0 - fx) + at(x0 + 1, y0 + 1) * fx;
+            let v = (top * (1.0 - fy) + bottom * fy).round() as u8;
+            out.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    out
+}
+
+/// Mean squared difference between horizontal and vertical neighbors of the first channel.
+fn sharpness(pixels: &[u8], width: u32, height: u32) -> f64 {
+    let at = |x: u32, y: u32| pixels[((y * width + x) * 4) as usize] as f64;
+    let mut sum = 0.0;
+    for y in 0..height - 1 {
+        for x in 0..width - 1 {
+            sum += (at(x + 1, y) - at(x, y)).powi(2) + (at(x, y + 1) - at(x, y)).powi(2);
+        }
+    }
+    sum / ((width - 1) * (height - 1)) as f64
+}
+
+/// Mean absolute difference from the source enlarged with nearest neighbor.
+fn error_from_nearest(pixels: &[u8], source: &[u8], width: u32, height: u32) -> f64 {
+    let mut sum = 0.0;
+    for y in 0..height * 2 {
+        for x in 0..width * 2 {
+            let out = pixels[((y * width * 2 + x) * 4) as usize] as f64;
+            let src = source[(((y / 2) * width + x / 2) * 4) as usize] as f64;
+            sum += (out - src).abs();
+        }
+    }
+    sum / (width * height * 4) as f64
+}
+
+#[test]
+fn enlarging_is_sharper_than_bilinear() {
+    let (width, height) = (240, 160);
+    let source = strokes(width, height);
+    let mut renderer = StillRenderer::new(width, height, source.clone());
+    let background = BackgroundSettings {
+        padding: 0.0,
+        corner_radius: 0.0,
+        shadow: Shadow {
+            opacity: 0.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let pixels = renderer.render(&background, width * 2, height * 2).unwrap();
+    let bilinear = bilinear_2x(&source, width, height);
+    let (ours, theirs) = (
+        sharpness(&pixels, width * 2, height * 2),
+        sharpness(&bilinear, width * 2, height * 2),
+    );
+    let (our_error, their_error) = (
+        error_from_nearest(&pixels, &source, width, height),
+        error_from_nearest(&bilinear, &source, width, height),
+    );
+    assert!(
+        ours > theirs * 1.2,
+        "sharpness {ours:.0} vs bilinear {theirs:.0}"
+    );
+    assert!(
+        our_error < their_error * 0.85,
+        "error {our_error:.1} vs bilinear {their_error:.1}"
+    );
+}
+
+#[test]
+fn auto_resolution_shows_every_video_pixel_once() {
+    let (width, height) = (640, 400);
+    let mut settings = EditSettings::default();
+    settings.zoom.auto = false;
+    settings.background.shadow.opacity = 0.0;
+    settings.background.corner_radius = 0.0;
+    let scene = Scene::new(SceneParts {
+        bounds: Rect {
+            x: 100.0,
+            y: 50.0,
+            width: width as f64 / 2.0,
+            height: height as f64 / 2.0,
+        },
+        video_size: (width, height),
+        duration_ms: 1_000.0,
+        events: &EventLog::default(),
+        settings,
+        cursors: HashMap::new(),
+        background: None,
+    });
+    let (out_w, out_h) = scene.output_size();
+    let pad = (0.08 * height as f64).round() as u32;
+    assert_eq!((out_w, out_h), (width + 2 * pad, height + 2 * pad));
+
+    struct Checks(Vec<u8>);
+    impl FrameSource for Checks {
+        fn frame_at(&mut self, _t_ms: f64) -> Result<CpuFrame<'_>> {
+            Ok(CpuFrame {
+                width: 640,
+                height: 400,
+                bytes_per_row: 640 * 4,
+                format: PixelFormat::Rgba8,
+                data: &self.0,
+                id: Some(1),
+                has_alpha: false,
+            })
+        }
+    }
+    let source = checkerboard(width, height);
+    let mut compositor = Compositor::new(out_w, out_h, PixelFormat::Rgba8).unwrap();
+    let pixels = compositor
+        .frame(&scene, &mut Checks(source.clone()), 0.0)
+        .unwrap();
+    let mut resampled = 0;
+    for y in 0..height {
+        for x in 0..width {
+            let out = (((y + pad) * out_w + x + pad) * 4) as usize;
+            if pixels[out].abs_diff(source[((y * width + x) * 4) as usize]) > 1 {
+                resampled += 1;
+            }
+        }
+    }
+    assert_eq!(resampled, 0);
 }

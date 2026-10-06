@@ -12,7 +12,7 @@ use std::{
 };
 
 use recast_export::{ExportRequest, Progress};
-use recast_project::{EditSettings, ZoomSegment};
+use recast_project::{EditSettings, SoundPack, ZoomSegment};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -290,6 +290,13 @@ pub async fn editor_stats(
     editors: State<'_, Editors>,
 ) -> Result<PreviewStats, String> {
     Ok(editors.session(window.label())?.stats())
+}
+
+/// A WAV file with the pack's click sound, for previewing it.
+#[tauri::command]
+#[specta::specta]
+pub async fn click_sound_preview(pack: SoundPack) -> Vec<u8> {
+    recast_export::sounds::preview(pack)
 }
 
 /// Exports the project with its current edits to `output_path`. Progress and the
