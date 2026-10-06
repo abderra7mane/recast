@@ -1,8 +1,8 @@
 //! The picker's AppKit side: one borderless, transparent panel per display above the menu
 //! bar and Dock, with a hint at the top of the display under the pointer. The panels never
-//! activate the app. The one under the pointer is key, so Esc reaches it and AppKit
-//! applies its cursor: AppKit only honors cursor rects and cursor updates in the key
-//! window and shows the arrow over the others.
+//! activate the app. The one under the pointer is key, so Esc reaches it. The system
+//! cursor is hidden while they are up and the views draw the picker's cursor instead:
+//! macOS shows the cursor of an app that isn't active only unreliably.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,7 +11,7 @@ use objc2::{
     rc::Retained, runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezierPath, NSColor, NSCursor, NSEvent, NSResponder, NSScreen,
+    NSBackingStoreType, NSBezierPath, NSColor, NSCursor, NSEvent, NSImage, NSResponder, NSScreen,
     NSScreenSaverWindowLevel, NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindingRule,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
@@ -40,6 +40,13 @@ struct ShownLabel {
     text: String,
 }
 
+/// The picker's cursor as drawn: the display it is on and its rectangle in that view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ShownCursor {
+    display: usize,
+    rect: NSRect,
+}
+
 struct Session {
     picker: Picker,
     main_height: f64,
@@ -54,14 +61,25 @@ struct Session {
     hint_display: Option<usize>,
     panels: Vec<Retained<KeyPanel>>,
     views: Vec<Retained<OverlayView>>,
-    camera: Retained<NSCursor>,
-    crosshair: Retained<NSCursor>,
-    cursor_kind: PickerCursor,
+    camera: Retained<NSImage>,
+    crosshair: Retained<NSImage>,
+    cursor: Option<ShownCursor>,
+    /// Times the system cursor was hidden, to show it as many times at the end.
+    hides: usize,
     done: Option<Done>,
 }
 
 impl Session {
-    fn cursor(&self) -> &Retained<NSCursor> {
+    /// Hides the system cursor, and hides it again when something else showed it: the
+    /// Dock shows it when the pointer passes over it.
+    fn keep_cursor_hidden(&mut self) {
+        if self.hides == 0 || appkit::cursor_visible() {
+            NSCursor::hide();
+            self.hides += 1;
+        }
+    }
+
+    fn cursor_image(&self) -> &Retained<NSImage> {
         match self.picker.cursor() {
             PickerCursor::Camera => &self.camera,
             PickerCursor::Crosshair => &self.crosshair,
@@ -103,17 +121,6 @@ define_class!(
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             self.draw();
-        }
-
-        #[unsafe(method(resetCursorRects))]
-        fn reset_cursor_rects(&self) {
-            let session = self.ivars().session.borrow();
-            self.addCursorRect_cursor(self.bounds(), session.cursor());
-        }
-
-        #[unsafe(method(cursorUpdate:))]
-        fn cursor_update(&self, _event: &NSEvent) {
-            self.ivars().session.borrow().cursor().set();
         }
 
         #[unsafe(method(mouseEntered:))]
@@ -192,12 +199,30 @@ fn label_for(s: &Session) -> Option<ShownLabel> {
     })
 }
 
-/// Brings the overlays in line with the picker: redraws what changed and switches the
-/// cursor when the picker wants another one. AppKit is called with the session released,
-/// as it may call back into the views.
+/// The picker's cursor under the pointer, placed in the view of the display it is on.
+fn cursor_for(s: &Session) -> Option<ShownCursor> {
+    let at = pointer(s.main_height);
+    let display = s.picker.display_index_at(at)?;
+    let bounds = &s.picker.displays()[display].bounds;
+    let hotspot = match s.picker.cursor() {
+        PickerCursor::Camera => cursor::HOTSPOT,
+        PickerCursor::Crosshair => cursor::CROSSHAIR_HOTSPOT,
+    };
+    Some(ShownCursor {
+        display,
+        rect: NSRect::new(
+            NSPoint::new(at.x - bounds.x - hotspot.0, at.y - bounds.y - hotspot.1),
+            NSSize::new(cursor::SIZE_POINTS, cursor::SIZE_POINTS),
+        ),
+    })
+}
+
+/// Brings the overlays in line with the picker and the pointer: redraws what changed.
+/// AppKit is called with the session released, as it may call back into the views.
 fn refresh(session: &Shared) {
-    let (views, redraw, dirty, cursor_changed, cursor) = {
+    let (views, redraw, dirty) = {
         let mut s = session.borrow_mut();
+        s.keep_cursor_hidden();
         let highlight = s.picker.highlight();
         let redraw = highlight != s.shown;
         s.shown = highlight;
@@ -224,11 +249,17 @@ fn refresh(session: &Shared) {
             s.label = label;
         }
 
-        let kind = s.picker.cursor();
-        let cursor_changed = kind != s.cursor_kind;
-        s.cursor_kind = kind;
-        let cursor = s.cursor().clone();
-        (s.views.clone(), redraw, dirty, cursor_changed, cursor)
+        let cursor = cursor_for(&s);
+        if cursor != s.cursor {
+            dirty.extend(
+                [s.cursor, cursor]
+                    .into_iter()
+                    .flatten()
+                    .map(|c| (c.display, inset(c.rect, -1.0, -1.0))),
+            );
+            s.cursor = cursor;
+        }
+        (s.views.clone(), redraw, dirty)
     };
     if redraw {
         for view in &views {
@@ -240,14 +271,6 @@ fn refresh(session: &Shared) {
             view.setNeedsDisplayInRect(rect);
         }
     }
-    if cursor_changed {
-        for view in &views {
-            if let Some(window) = view.window() {
-                window.invalidateCursorRectsForView(view);
-            }
-        }
-    }
-    cursor.set();
 }
 
 impl OverlayView {
@@ -281,18 +304,21 @@ impl OverlayView {
 
     fn finish(&self, picked: Option<Picked>) {
         let mtm = self.mtm();
-        let (panels, views, done) = {
+        let (panels, views, hides, done) = {
             let mut s = self.ivars().session.borrow_mut();
             (
                 std::mem::take(&mut s.panels),
                 std::mem::take(&mut s.views),
+                std::mem::take(&mut s.hides),
                 s.done.take(),
             )
         };
         for panel in &panels {
             panel.orderOut(None);
         }
-        NSCursor::arrowCursor().set();
+        for _ in 0..hides {
+            NSCursor::unhide();
+        }
         appkit::release_later((panels, views), mtm);
         if let Some(done) = done {
             done(picked);
@@ -361,6 +387,9 @@ impl OverlayView {
             .filter(|l| l.display == self.ivars().display)
         {
             draw_pill(&session.label_style, &label.text, label.rect);
+        }
+        if let Some(shown) = session.cursor.filter(|c| c.display == self.ivars().display) {
+            session.cursor_image().drawInRect(shown.rect);
         }
     }
 }
@@ -474,16 +503,10 @@ pub fn open(
         return;
     }
 
-    let make_cursor = |(size_px, pixels): (usize, Vec<u8>), hotspot: (f64, f64)| {
-        appkit::cursor(
-            size_px,
-            &pixels,
-            cursor::SIZE_POINTS,
-            NSPoint::new(hotspot.0, hotspot.1),
-        )
-    };
-    let camera = make_cursor(cursor::camera_pixels(2.0), cursor::HOTSPOT);
-    let crosshair = make_cursor(cursor::crosshair_pixels(2.0), cursor::CROSSHAIR_HOTSPOT);
+    let make_image =
+        |(size_px, pixels): (usize, Vec<u8>)| appkit::image(size_px, &pixels, cursor::SIZE_POINTS);
+    let camera = make_image(cursor::camera_pixels(2.0));
+    let crosshair = make_image(cursor::crosshair_pixels(2.0));
     let mut picker = request.picker(displays, windows, own_pid);
     let at = pointer(main_height);
     picker.move_to(at);
@@ -507,7 +530,6 @@ pub fn open(
         hint_style,
         hint_rects,
         shown: picker.highlight(),
-        cursor_kind: picker.cursor(),
         picker,
         main_height,
         label: None,
@@ -516,51 +538,45 @@ pub fn open(
         views: Vec::new(),
         camera,
         crosshair,
+        cursor: None,
+        hides: 0,
         done: Some(done),
     };
     session.label = label_for(&session);
+    session.cursor = cursor_for(&session);
     let session: Shared = Rc::new(RefCell::new(session));
 
-    // Cursor updates can't be combined with `ActiveAlways`, so they get their own area.
-    let tracking = [
-        NSTrackingAreaOptions::MouseMoved
-            | NSTrackingAreaOptions::MouseEnteredAndExited
-            | NSTrackingAreaOptions::ActiveAlways
-            | NSTrackingAreaOptions::InVisibleRect,
-        NSTrackingAreaOptions::CursorUpdate
-            | NSTrackingAreaOptions::ActiveInKeyWindow
-            | NSTrackingAreaOptions::InVisibleRect,
-    ];
     for (index, frame) in frames.iter().enumerate() {
         let panel = make_panel(mtm, *frame);
         let view = OverlayView::new(mtm, index, session.clone(), frame.size);
-        for options in tracking {
-            // SAFETY: the owner is the view the area is added to, which outlives it.
-            let area = unsafe {
-                NSTrackingArea::initWithRect_options_owner_userInfo(
-                    NSTrackingArea::alloc(),
-                    NSRect::ZERO,
-                    options,
-                    Some(&view),
-                    None,
-                )
-            };
-            view.addTrackingArea(&area);
-        }
+        // SAFETY: the owner is the view the area is added to, which outlives it.
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                NSTrackingAreaOptions::MouseMoved
+                    | NSTrackingAreaOptions::MouseEnteredAndExited
+                    | NSTrackingAreaOptions::ActiveAlways
+                    | NSTrackingAreaOptions::InVisibleRect,
+                Some(&view),
+                None,
+            )
+        };
+        view.addTrackingArea(&area);
         panel.setContentView(Some(&view));
         let mut s = session.borrow_mut();
         s.panels.push(panel);
         s.views.push(view);
     }
 
-    let (panels, views, cursor) = {
+    let (panels, views) = {
         let s = session.borrow();
-        (s.panels.clone(), s.views.clone(), s.cursor().clone())
+        (s.panels.clone(), s.views.clone())
     };
     for panel in &panels {
         panel.orderFrontRegardless();
     }
     panels[key].makeKeyWindow();
     panels[key].makeFirstResponder(Some(&views[key]));
-    cursor.set();
+    session.borrow_mut().keep_cursor_hidden();
 }

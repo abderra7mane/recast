@@ -6,9 +6,9 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
-    NSBezierPath, NSBitmapImageRep, NSColor, NSCursor, NSDeviceRGBColorSpace, NSFont,
-    NSFontAttributeName, NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSPanel,
-    NSResponder, NSScreen, NSStringDrawing, NSWindow,
+    NSBezierPath, NSBitmapImageRep, NSColor, NSDeviceRGBColorSpace, NSFont, NSFontAttributeName,
+    NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSPanel, NSResponder, NSScreen,
+    NSStringDrawing, NSWindow,
 };
 use objc2_foundation::{NSDictionary, NSNumber, NSObject, NSPoint, NSRect, NSSize, NSString};
 use recast_project::Rect;
@@ -110,13 +110,8 @@ impl TextStyle {
     }
 }
 
-/// A cursor from premultiplied RGBA pixels: `size_px` square, `size_points` wide on screen.
-pub fn cursor(
-    size_px: usize,
-    pixels: &[u8],
-    size_points: f64,
-    hotspot: NSPoint,
-) -> Retained<NSCursor> {
+/// An image from premultiplied RGBA pixels: `size_px` square, `size_points` wide on screen.
+pub fn image(size_px: usize, pixels: &[u8], size_points: f64) -> Retained<NSImage> {
     // SAFETY: a null plane pointer makes the rep allocate its own buffer of
     // `size_px * 4 * size_px` bytes, which is filled right after.
     let rep = unsafe {
@@ -142,11 +137,12 @@ pub fn cursor(
     rep.setSize(NSSize::new(size_points, size_points));
     let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(size_points, size_points));
     image.addRepresentation(&rep);
-    NSCursor::initWithImage_hotSpot(NSCursor::alloc(), &image, hotspot)
+    image
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
+    fn CGCursorIsVisible() -> u32;
     fn _CGSDefaultConnection() -> i32;
     fn CGSSetConnectionProperty(
         connection: i32,
@@ -156,9 +152,9 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-/// Lets Recast set the cursor while another app is active. macOS doesn't always grant
-/// the activation an overlay asks for, and it ignores a background app's cursor
-/// otherwise. This is the private window server property screenshot tools rely on.
+/// Lets Recast hide the cursor while another app is active, which macOS ignores from a
+/// background app otherwise. The picker hides it and draws its own. This is the private
+/// window server property screenshot tools rely on.
 pub fn set_cursor_in_background() {
     let key = NSString::from_str("SetsCursorInBackground");
     let value = NSNumber::new_bool(true);
@@ -176,6 +172,11 @@ pub fn set_cursor_in_background() {
     if status != 0 {
         log::warn!("cannot set the cursor in the background: CGError {status}");
     }
+}
+
+pub fn cursor_visible() -> bool {
+    // SAFETY: takes no arguments and only reads the window server's cursor state.
+    unsafe { CGCursorIsVisible() != 0 }
 }
 
 /// The Core Graphics display id of a screen.
