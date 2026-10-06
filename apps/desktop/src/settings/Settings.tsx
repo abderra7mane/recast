@@ -277,7 +277,7 @@ export function Settings() {
           <Toggle
             id="countdown"
             label="Countdown"
-            description="Count down from 3 before recording. Click or press Esc to skip it."
+            description="Count down from 3 before recording. Click to start right away, or press Esc to cancel."
             checked={settings.recording.countdown}
             onChange={(countdown) => recording({ countdown })}
           />

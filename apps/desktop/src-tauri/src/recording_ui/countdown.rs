@@ -1,5 +1,6 @@
 //! The countdown before recording: a large number over the target display with the
-//! recorded area outlined. A click or Esc skips it. It is left out of captures.
+//! recorded area outlined. A click, Return or Space starts recording right away; Esc
+//! cancels it. It is left out of captures.
 
 use std::{
     cell::{Cell, RefCell},
@@ -26,8 +27,18 @@ const KEY_ESCAPE: u16 = 53;
 const KEY_RETURN: u16 = 36;
 const KEY_SPACE: u16 = 49;
 const BOX_SIZE: f64 = 168.0;
+const HINT_LINE: f64 = 15.0;
 
-pub type Done = Box<dyn FnOnce()>;
+/// How the countdown ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    /// It ran out or was skipped: start recording.
+    Start,
+    /// The user pressed Esc: don't record.
+    Cancel,
+}
+
+pub type Done = Box<dyn FnOnce(Ended)>;
 
 pub struct ViewIvars {
     remaining: Cell<u32>,
@@ -66,19 +77,21 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, _event: &NSEvent) {
-            finish(self.mtm());
+            finish(self.mtm(), Ended::Start);
         }
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            if matches!(event.keyCode(), KEY_ESCAPE | KEY_RETURN | KEY_SPACE) {
-                finish(self.mtm());
+            match event.keyCode() {
+                KEY_RETURN | KEY_SPACE => finish(self.mtm(), Ended::Start),
+                KEY_ESCAPE => finish(self.mtm(), Ended::Cancel),
+                _ => {}
             }
         }
 
         #[unsafe(method(cancelOperation:))]
         fn cancel_operation(&self, _sender: Option<&objc2::runtime::AnyObject>) {
-            finish(self.mtm());
+            finish(self.mtm(), Ended::Cancel);
         }
     }
 );
@@ -114,14 +127,22 @@ impl CountdownView {
         );
         appkit::fill_rounded(card, 28.0, &color(0.08, 0.08, 0.09, 0.82));
         let number = TextStyle::new(96.0, &NSColor::whiteColor());
-        let digit_area = NSRect::new(card.origin, NSSize::new(BOX_SIZE, BOX_SIZE - 22.0));
+        let digit_area = NSRect::new(card.origin, NSSize::new(BOX_SIZE, BOX_SIZE - 34.0));
         number.draw_centered(&ivars.remaining.get().to_string(), digit_area);
         let hint = TextStyle::with_weight(11.0, 0.0, &color(1.0, 1.0, 1.0, 0.7));
-        let hint_area = NSRect::new(
-            NSPoint::new(card.origin.x, card.origin.y + BOX_SIZE - 40.0),
-            NSSize::new(BOX_SIZE, 24.0),
-        );
-        hint.draw_centered("Click or press Esc to skip", hint_area);
+        for (line, text) in ["Click to start now", "Esc to cancel"]
+            .into_iter()
+            .enumerate()
+        {
+            let line_area = NSRect::new(
+                NSPoint::new(
+                    card.origin.x,
+                    card.origin.y + BOX_SIZE - 50.0 + line as f64 * HINT_LINE,
+                ),
+                NSSize::new(BOX_SIZE, HINT_LINE),
+            );
+            hint.draw_centered(text, line_area);
+        }
     }
 }
 
@@ -136,7 +157,8 @@ thread_local! {
     static SHOWN: RefCell<Option<Shown>> = const { RefCell::new(None) };
 }
 
-/// Counts down from `seconds` over display `display_id`, then calls `done`. `target` is
+/// Counts down from `seconds` over display `display_id`, then calls `done` with how it
+/// ended. `target` is
 /// the recorded area in global points (y down), outlined when given.
 pub fn show(
     mtm: MainThreadMarker,
@@ -147,7 +169,7 @@ pub fn show(
 ) {
     close(mtm);
     let Some(screen) = appkit::screen_for(display_id, mtm) else {
-        done();
+        done(Ended::Start);
         return;
     };
     let frame = screen.frame();
@@ -218,7 +240,7 @@ pub fn show(
         });
     if let Err(e) = spawned {
         log::warn!("the countdown can't run, starting right away: {e}");
-        finish(mtm);
+        finish(mtm, Ended::Start);
     }
 }
 
@@ -234,7 +256,7 @@ fn tick() {
         remaining == 0
     });
     if ended {
-        finish(mtm);
+        finish(mtm, Ended::Start);
     }
 }
 
@@ -248,9 +270,9 @@ fn take(mtm: MainThreadMarker) -> Option<Done> {
 }
 
 /// Ends the countdown now and calls its `done`.
-fn finish(mtm: MainThreadMarker) {
+fn finish(mtm: MainThreadMarker, ended: Ended) {
     if let Some(done) = take(mtm) {
-        done();
+        done(ended);
     }
 }
 

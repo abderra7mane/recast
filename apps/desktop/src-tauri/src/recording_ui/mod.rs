@@ -205,11 +205,16 @@ fn show_countdown(app: &AppHandle, id: u64) {
             placement.display_id,
             placement.outline,
             COUNTDOWN_SECONDS,
-            Box::new(move || {
+            Box::new(move |ended| {
                 if let Some(focus) = done_app.state::<RecorderUi>().take_focus() {
                     focus.restore(mtm);
                 }
-                tauri::async_runtime::spawn(countdown_done(done_app, id));
+                match ended {
+                    countdown::Ended::Start => {
+                        tauri::async_runtime::spawn(countdown_done(done_app, id));
+                    }
+                    countdown::Ended::Cancel => crate::actions::cancel_recording(&done_app),
+                }
             }),
         );
     });
