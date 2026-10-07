@@ -6,7 +6,7 @@ members = ["crates/*", "apps/desktop/src-tauri"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
-license = "UNLICENSED"
+license = "MIT"
 publish = false
 
 [workspace.dependencies]
