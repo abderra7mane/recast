@@ -221,6 +221,26 @@ impl Markups {
     }
 }
 
+/// Focuses the markup window editing the file at `path`; false when there is none.
+pub fn focus_window_for(app: &AppHandle, path: &Path) -> bool {
+    let label = app
+        .state::<Markups>()
+        .windows
+        .lock()
+        .ok()
+        .and_then(|windows| {
+            windows
+                .iter()
+                .find(|(_, session)| session.capture.current_file() == path)
+                .map(|(label, _)| label.clone())
+        });
+    let Some(window) = label.and_then(|label| app.get_webview_window(&label)) else {
+        return false;
+    };
+    let _ = window.unminimize();
+    window.set_focus().is_ok()
+}
+
 pub fn open_window(app: &AppHandle, capture: Arc<Capture>) -> Result<(), String> {
     let markups = app.state::<Markups>();
     let label = format!(

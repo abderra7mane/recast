@@ -316,6 +316,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             app_info,
             open_logs_folder,
             copy_diagnostics,
+            screenshots::list_screenshots,
+            screenshots::edit_screenshot,
             markup::markup_open,
             markup::markup_frame,
             markup::markup_finish,

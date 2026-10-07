@@ -86,7 +86,6 @@ impl Capture {
     }
 
     /// A PNG file to edit, `scale_factor` pixels per point; it counts as saved.
-    #[cfg(feature = "synthetic")]
     pub fn open(path: &Path, scale_factor: f64) -> Result<Self, String> {
         let (width, height, rgba) =
             recast_render::bitmap::load_png(path).map_err(|e| e.to_string())?;
@@ -171,6 +170,35 @@ pub fn edit(app: &AppHandle, capture: Arc<Capture>) {
             log::warn!("cannot open the screenshot editor: {e}");
         }
     });
+}
+
+/// Opens the saved screenshot at `path` in the markup editor, or focuses the editor
+/// already showing it.
+pub fn edit_saved(app: &AppHandle, path: &Path) -> Result<(), String> {
+    if markup::focus_window_for(app, path) {
+        return Ok(());
+    }
+    let scale_factor = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map_or(2.0, |monitor| monitor.scale_factor());
+    let capture = Capture::open(path, scale_factor)?;
+    markup::open_window(app, Arc::new(capture))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn list_screenshots(
+    settings: tauri::State<'_, SettingsStore>,
+) -> Result<Vec<files::ScreenshotSummary>, String> {
+    Ok(files::list_screenshots(&settings.get().screenshots.dir()))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn edit_screenshot(app: AppHandle, path: String) -> Result<(), String> {
+    edit_saved(&app, Path::new(&path))
 }
 
 pub fn reveal(path: &Path) {

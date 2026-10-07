@@ -56,6 +56,8 @@ export const commands = {
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	openLogsFolder: () => __TAURI_INVOKE<void>("open_logs_folder"),
 	copyDiagnostics: () => typedError<null, string>(__TAURI_INVOKE("copy_diagnostics")),
+	listScreenshots: () => typedError<ScreenshotSummary[], string>(__TAURI_INVOKE("list_screenshots")),
+	editScreenshot: (path: string) => typedError<null, string>(__TAURI_INVOKE("edit_screenshot", { path })),
 	markupOpen: () => typedError<MarkupInit, string>(__TAURI_INVOKE("markup_open")),
 	/**
 	 *  The Beautify frame around a `width × height` image, without the image, scaled to fit
@@ -375,6 +377,16 @@ export type ScreenshotSettings = {
 	/**  Where captures are saved; `None` means `~/Pictures/Recast`. */
 	folder?: string | null,
 	playShutterSound?: boolean,
+};
+
+/**  A saved screenshot, for the Library and Recent Screenshots. */
+export type ScreenshotSummary = {
+	path: string,
+	/**  File name without the extension. */
+	name: string,
+	modifiedAtUnixMs: number | null,
+	width: number,
+	height: number,
 };
 
 export type ScreenshotTaken = {

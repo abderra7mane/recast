@@ -16,6 +16,7 @@ import {
   type Phase,
   type PickMode,
   type ProjectSummary,
+  type ScreenshotSummary,
   type UnfinishedBundle,
 } from "@/bindings";
 import { Button } from "@/components/ui/button";
@@ -248,6 +249,59 @@ function RecordingsCard({ projects }: { projects: ProjectSummary[] }) {
   );
 }
 
+function ScreenshotsCard({ shots }: { shots: ScreenshotSummary[] }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Screenshots</CardTitle>
+        <CardDescription>Newest first</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        {shots.length === 0 && (
+          <p className="text-muted-foreground text-sm">No screenshots yet.</p>
+        )}
+        {shots.map((shot) => (
+          <div
+            key={shot.path}
+            className="flex items-center justify-between gap-2"
+          >
+            <div className="min-w-0">
+              <p className="truncate text-sm" title={shot.path}>
+                {shot.name}
+              </p>
+              <p className="text-muted-foreground text-xs">
+                {shot.width}×{shot.height}
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label={`Show ${shot.name} in Finder`}
+                onClick={() => void commands.revealInFinder(shot.path)}
+              >
+                <FolderOpen />
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  const result = await commands.editScreenshot(shot.path);
+                  setError(result.status === "error" ? result.error : null);
+                }}
+              >
+                <Pencil /> Edit
+              </Button>
+            </div>
+          </div>
+        ))}
+        {error && <p className="text-destructive text-sm">{error}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
 type Outcome = { status: "ok" } | { status: "error"; error: string };
 
 const MODES: { mode: PickMode; label: string; Icon: typeof Crop }[] = [
@@ -322,12 +376,15 @@ export function Library() {
   const [saved, setSaved] = useState<FinishedRecording | null>(null);
   const [unfinished, setUnfinished] = useState<UnfinishedBundle[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [shots, setShots] = useState<ScreenshotSummary[]>([]);
 
   const refresh = useCallback(async () => {
     const result = await commands.listUnfinished();
     if (result.status === "ok") setUnfinished(result.data);
     const listed = await commands.listProjects();
     if (listed.status === "ok") setProjects(listed.data);
+    const screenshots = await commands.listScreenshots();
+    if (screenshots.status === "ok") setShots(screenshots.data);
     const current = await commands.recordingPhase();
     if (current.status === "ok") setPhase(current.data);
   }, []);
@@ -394,6 +451,8 @@ export function Library() {
       />
 
       <RecordingsCard projects={projects} />
+
+      <ScreenshotsCard shots={shots} />
     </main>
   );
 }

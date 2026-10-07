@@ -14,6 +14,7 @@ use crate::{
     editor::{self, ProjectSummary},
     flow::{Flow, Phase},
     hotkeys,
+    screenshots::{self, files::ScreenshotSummary},
     settings::SettingsStore,
     shortcuts::ShortcutAction,
     windows,
@@ -21,6 +22,7 @@ use crate::{
 
 const TRAY_ID: &str = "recast";
 const RECENT_PREFIX: &str = "recent:";
+const RECENT_SHOT_PREFIX: &str = "recent-shot:";
 pub const RECENT_COUNT: usize = 5;
 /// Menu bar icons are 18 points tall; drawn at 2× for Retina displays.
 const ICON_PX: usize = 36;
@@ -48,10 +50,23 @@ pub fn recent(projects: Vec<ProjectSummary>, count: usize) -> Vec<Recent> {
         .collect()
 }
 
-/// Paths behind the Recent Recordings items, by position.
+/// The newest `count` saved screenshots, for the Recent Screenshots menu.
+pub fn recent_screenshots(shots: Vec<ScreenshotSummary>, count: usize) -> Vec<Recent> {
+    shots
+        .into_iter()
+        .take(count)
+        .map(|s| Recent {
+            label: s.name,
+            path: s.path,
+        })
+        .collect()
+}
+
+/// Paths behind the Recent Recordings and Recent Screenshots items, by position.
 #[derive(Default)]
 pub struct TrayState {
     recent: Mutex<Vec<String>>,
+    recent_shots: Mutex<Vec<String>>,
 }
 
 fn sdf_circle(px: f64, py: f64, cx: f64, cy: f64, r: f64) -> f64 {
@@ -124,6 +139,29 @@ fn item(
     }
 }
 
+fn recent_submenu(
+    app: &AppHandle,
+    title: &str,
+    empty: &str,
+    prefix: &str,
+    recent: &[Recent],
+) -> tauri::Result<Submenu<tauri::Wry>> {
+    let items: Vec<MenuItem<tauri::Wry>> = if recent.is_empty() {
+        vec![item(app, &format!("{prefix}none"), empty, false, None)?]
+    } else {
+        recent
+            .iter()
+            .enumerate()
+            .map(|(i, r)| item(app, &format!("{prefix}{i}"), &r.label, true, None))
+            .collect::<tauri::Result<_>>()?
+    };
+    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items
+        .iter()
+        .map(|i| i as &dyn IsMenuItem<tauri::Wry>)
+        .collect();
+    Submenu::with_items(app, title, true, &refs)
+}
+
 fn build_menu(app: &AppHandle, phase: &Phase) -> tauri::Result<Menu<tauri::Wry>> {
     let shortcut = |action| hotkeys::accelerator(app, action);
     let menu = Menu::new(app)?;
@@ -171,31 +209,45 @@ fn build_menu(app: &AppHandle, phase: &Phase) -> tauri::Result<Menu<tauri::Wry>>
         menu.append(&separator()?)?;
     }
 
-    let root = app.state::<SettingsStore>().get().recording.dir();
-    let recent = recent(editor::list_projects(&root), RECENT_COUNT);
-    let recent_items: Vec<MenuItem<tauri::Wry>> = recent
-        .iter()
-        .enumerate()
-        .map(|(i, r)| item(app, &format!("{RECENT_PREFIX}{i}"), &r.label, true, None))
-        .collect::<tauri::Result<_>>()?;
-    let empty = item(app, "no-recent", "No Recordings Yet", false, None)?;
-    let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = if recent_items.is_empty() {
-        vec![&empty]
-    } else {
-        recent_items
-            .iter()
-            .map(|i| i as &dyn IsMenuItem<tauri::Wry>)
-            .collect()
-    };
-    menu.append(&Submenu::with_items(app, "Recent Recordings", true, &refs)?)?;
-    *app.state::<TrayState>()
-        .recent
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = recent.into_iter().map(|r| r.path).collect();
+    let settings = app.state::<SettingsStore>().get();
+    let state = app.state::<TrayState>();
+    let recent = recent(
+        editor::list_projects(&settings.recording.dir()),
+        RECENT_COUNT,
+    );
+    menu.append(&recent_submenu(
+        app,
+        "Recent Recordings",
+        "No Recordings Yet",
+        RECENT_PREFIX,
+        &recent,
+    )?)?;
+    *state.recent.lock().unwrap_or_else(|e| e.into_inner()) =
+        recent.into_iter().map(|r| r.path).collect();
     menu.append(&item(
         app,
         "open-folder",
         "Open Recordings Folder",
+        true,
+        None,
+    )?)?;
+    let shots = recent_screenshots(
+        screenshots::files::list_screenshots(&settings.screenshots.dir()),
+        RECENT_COUNT,
+    );
+    menu.append(&recent_submenu(
+        app,
+        "Recent Screenshots",
+        "No Screenshots Yet",
+        RECENT_SHOT_PREFIX,
+        &shots,
+    )?)?;
+    *state.recent_shots.lock().unwrap_or_else(|e| e.into_inner()) =
+        shots.into_iter().map(|r| r.path).collect();
+    menu.append(&item(
+        app,
+        "open-screenshots-folder",
+        "Open Screenshots Folder",
         true,
         None,
     )?)?;
@@ -282,6 +334,19 @@ fn on_tray(tray: &TrayIcon, event: TrayIconEvent) {
     }
 }
 
+/// The path behind the recent item `id`, when `id` has `prefix`.
+fn recent_path(
+    app: &AppHandle,
+    id: &str,
+    prefix: &str,
+    paths: impl Fn(&TrayState) -> &Mutex<Vec<String>>,
+) -> Option<String> {
+    let index = id.strip_prefix(prefix)?.parse::<usize>().ok()?;
+    let state = app.state::<TrayState>();
+    let paths = paths(&state).lock().unwrap_or_else(|e| e.into_inner());
+    paths.get(index).cloned()
+}
+
 fn on_menu(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     match id {
@@ -292,6 +357,10 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
             let root = app.state::<SettingsStore>().get().recording.dir();
             crate::actions::open_folder(&root);
         }
+        "open-screenshots-folder" => {
+            let dir = app.state::<SettingsStore>().get().screenshots.dir();
+            crate::actions::open_folder(&dir);
+        }
         "library" => windows::show_or_log(app, windows::LIBRARY),
         "settings" => windows::show_or_log(app, windows::SETTINGS),
         "updates" => {
@@ -301,22 +370,14 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
         _ => {
             if let Some(action) = ShortcutAction::ALL.into_iter().find(|a| menu_id(*a) == id) {
                 crate::actions::run(app, action);
-            } else if let Some(index) = id
-                .strip_prefix(RECENT_PREFIX)
-                .and_then(|i| i.parse::<usize>().ok())
-            {
-                let path = app
-                    .state::<TrayState>()
-                    .recent
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(index)
-                    .cloned();
-                if let Some(path) = path
-                    && let Err(e) = editor::commands::open_editor_window(app, Path::new(&path))
-                {
+            } else if let Some(path) = recent_path(app, id, RECENT_PREFIX, |s| &s.recent) {
+                if let Err(e) = editor::commands::open_editor_window(app, Path::new(&path)) {
                     log::warn!("cannot open {path}: {e}");
                 }
+            } else if let Some(path) = recent_path(app, id, RECENT_SHOT_PREFIX, |s| &s.recent_shots)
+                && let Err(e) = screenshots::edit_saved(app, Path::new(&path))
+            {
+                log::warn!("cannot open {path}: {e}");
             }
         }
     }
@@ -347,6 +408,24 @@ mod tests {
         assert_eq!(recent[0].path, "/m/Take 7.recast");
         assert_eq!(recent[0].label, "Take 7  (1:05)");
         assert_eq!(recent[4].path, "/m/Take 3.recast");
+    }
+
+    #[test]
+    fn recent_screenshots_keep_the_listed_order() {
+        let shots = (0..7)
+            .map(|i| ScreenshotSummary {
+                path: format!("/p/Shot {i}.png"),
+                name: format!("Shot {i}"),
+                modified_at_unix_ms: (10 - i) as f64,
+                width: 10,
+                height: 10,
+            })
+            .collect();
+        let recent = recent_screenshots(shots, RECENT_COUNT);
+        assert_eq!(recent.len(), 5);
+        assert_eq!(recent[0].label, "Shot 0");
+        assert_eq!(recent[0].path, "/p/Shot 0.png");
+        assert_eq!(recent[4].label, "Shot 4");
     }
 
     #[test]
