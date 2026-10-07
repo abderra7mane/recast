@@ -1,6 +1,5 @@
-//! An overlay opened while another app is active needs Recast to be the active app, or
-//! macOS ignores the cursor it sets. `Focus` activates Recast and later hands activation
-//! back to the app the user was in.
+//! Makes Recast the active app while its picker or countdown is up over another app, and
+//! later hands activation back to the app the user was in.
 
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
