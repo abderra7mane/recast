@@ -36,7 +36,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/<owner>/recast-releases/releases/latest/download/latest.json"
+        "https://github.com/abderra7mane/recast/releases/latest/download/latest.json"
       ],
       "pubkey": "REPLACE_WITH_UPDATER_PUBLIC_KEY",
       "requireSignedVersion": true

@@ -5,7 +5,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -14,8 +14,6 @@ concurrency:
 jobs:
   release:
     runs-on: ${{ vars.MACOS_RUNNER || 'macos-15' }}
-    env:
-      RELEASES_REPO: ${{ vars.RELEASES_OWNER }}/${{ vars.RELEASES_REPO }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -29,18 +27,12 @@ jobs:
 
       - name: Check the release settings
         env:
-          RELEASES_OWNER: ${{ vars.RELEASES_OWNER }}
-          RELEASES_REPO_NAME: ${{ vars.RELEASES_REPO }}
           UPDATER_PUBKEY: ${{ vars.UPDATER_PUBKEY }}
           HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
-          HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
         run: |
           missing=()
-          [ -n "$RELEASES_OWNER" ] || missing+=("variable RELEASES_OWNER")
-          [ -n "$RELEASES_REPO_NAME" ] || missing+=("variable RELEASES_REPO")
           [ -n "$UPDATER_PUBKEY" ] || missing+=("variable UPDATER_PUBKEY")
           [ "$HAS_SIGNING_KEY" = "true" ] || missing+=("secret TAURI_SIGNING_PRIVATE_KEY")
-          [ "$HAS_RELEASES_TOKEN" = "true" ] || missing+=("secret RELEASES_TOKEN")
           if [ ${#missing[@]} -gt 0 ]; then
             printf '::error::Missing %s\n' "${missing[@]}"
             exit 1
@@ -49,22 +41,22 @@ jobs:
 
       - name: Build the app, DMG and signed updater archive
         env:
-          UPDATER_ENDPOINT: https://github.com/${{ env.RELEASES_REPO }}/releases/latest/download/latest.json
+          UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
           UPDATER_PUBKEY: ${{ vars.UPDATER_PUBKEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: make release-bundle
 
       - name: Collect the release files and latest.json
-        run: make release-assets REPO="$RELEASES_REPO"
+        run: make release-assets REPO="$GITHUB_REPOSITORY"
 
-      - name: Publish to the releases repo
+      - name: Publish the release
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           cd target/release-assets
           gh release create "$GITHUB_REF_NAME" \
-            --repo "$RELEASES_REPO" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Recast ${GITHUB_REF_NAME#v}" \
             --notes-file notes.md \
             ./*.dmg ./*.app.tar.gz ./*.app.tar.gz.sig latest.json
