@@ -9,6 +9,9 @@ dist-ssr
 *.log
 .vite
 
+# Recording log of a test bundle
+!crates/recast-project/tests/fixtures/**/*.log
+
 # Tauri
 apps/desktop/src-tauri/gen/schemas
 

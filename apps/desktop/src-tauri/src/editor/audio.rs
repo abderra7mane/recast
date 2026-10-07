@@ -529,17 +529,23 @@ mod tests {
         }
     }
 
-    /// A device that calls back every 10 ms for 300 ms, then goes quiet.
+    /// A device that calls back every 10 ms for 300 ms, then goes quiet. Each callback
+    /// takes the audio for the time since the previous one, so late callbacks don't
+    /// slow the clock.
     fn failing_device(shared: &Arc<Shared>) -> Option<(Box<dyn Any>, Output)> {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (shared, stopped) = (shared.clone(), stop.clone());
         thread::spawn(move || {
             let started = Instant::now();
-            let mut data = vec![0.0; 480 * 2];
+            let mut last = started;
             while started.elapsed() < Duration::from_millis(300)
                 && !stopped.load(std::sync::atomic::Ordering::SeqCst)
             {
+                let now = Instant::now();
+                let frames = (now.duration_since(last).as_secs_f64() * SAMPLE_RATE as f64) as usize;
+                let mut data = vec![0.0; frames * FAKE_OUTPUT.channels];
                 fill(&shared, FAKE_OUTPUT, &mut data, Duration::ZERO);
+                last = now;
                 thread::sleep(Duration::from_millis(10));
             }
         });
