@@ -4,7 +4,10 @@
 //! cursor is hidden while they are up and the views draw the picker's cursor instead:
 //! macOS shows the cursor of an app that isn't active only unreliably.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
 use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
@@ -88,6 +91,31 @@ impl Session {
 }
 
 type Shared = Rc<RefCell<Session>>;
+
+thread_local! {
+    /// The open picker and its generation, for windows listed after it opened.
+    static CURRENT: RefCell<Option<(u64, Weak<RefCell<Session>>)>> = const { RefCell::new(None) };
+}
+
+/// Gives the picker of `generation` the windows it can pick, ordered front to back.
+pub fn set_windows(generation: u64, windows: Vec<PickerWindow>) {
+    let session = CURRENT.with_borrow(|current| {
+        current
+            .as_ref()
+            .filter(|(g, _)| *g == generation)
+            .and_then(|(_, session)| session.upgrade())
+    });
+    let Some(session) = session else {
+        return;
+    };
+    {
+        let mut s = session.borrow_mut();
+        s.picker.set_windows(windows);
+        let at = pointer(s.main_height);
+        s.picker.move_to(at);
+    }
+    refresh(&session);
+}
 
 pub struct ViewIvars {
     display: usize,
@@ -472,12 +500,12 @@ fn make_panel(mtm: MainThreadMarker, frame: NSRect) -> Retained<KeyPanel> {
     panel
 }
 
-/// Shows the overlays and calls `done` with the pick, or `None` when cancelled.
-/// `windows` is ordered front to back.
+/// Shows the overlays and calls `done` with the pick, or `None` when cancelled. They
+/// start without windows; `set_windows` with the same `generation` adds them.
 pub fn open(
     mtm: MainThreadMarker,
     request: PickRequest,
-    windows: Vec<PickerWindow>,
+    generation: u64,
     own_pid: i32,
     done: Done,
 ) {
@@ -510,7 +538,7 @@ pub fn open(
         |(size_px, pixels): (usize, Vec<u8>)| appkit::image(size_px, &pixels, cursor::SIZE_POINTS);
     let camera = make_image(cursor::camera_pixels(2.0));
     let crosshair = make_image(cursor::crosshair_pixels(2.0));
-    let mut picker = request.picker(displays, windows, own_pid);
+    let mut picker = request.picker(displays, Vec::new(), own_pid);
     let at = pointer(main_height);
     picker.move_to(at);
     let key = picker.display_index_at(at).unwrap_or(0);
@@ -548,6 +576,7 @@ pub fn open(
     session.label = label_for(&session);
     session.cursor = cursor_for(&session);
     let session: Shared = Rc::new(RefCell::new(session));
+    CURRENT.set(Some((generation, Rc::downgrade(&session))));
 
     for (index, frame) in frames.iter().enumerate() {
         let panel = make_panel(mtm, *frame);

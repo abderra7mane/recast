@@ -208,6 +208,7 @@ struct Drag {
 pub struct Picker {
     displays: Vec<PickerDisplay>,
     windows: Vec<PickerWindow>,
+    own_pid: i32,
     mode: PickMode,
     pointer: Option<Point>,
     drag: Option<Drag>,
@@ -241,16 +242,25 @@ impl Picker {
         windows: Vec<PickerWindow>,
         own_pid: i32,
     ) -> Self {
-        Self {
+        let mut picker = Self {
             displays,
-            windows: windows
-                .into_iter()
-                .filter(|w| pickable(w, own_pid))
-                .collect(),
+            windows: Vec::new(),
+            own_pid,
             mode,
             pointer: None,
             drag: None,
-        }
+        };
+        picker.set_windows(windows);
+        picker
+    }
+
+    /// Replaces the windows, ordered front to back; windows that can't be picked are
+    /// dropped.
+    pub fn set_windows(&mut self, windows: Vec<PickerWindow>) {
+        self.windows = windows
+            .into_iter()
+            .filter(|w| pickable(w, self.own_pid))
+            .collect();
     }
 
     pub fn displays(&self) -> &[PickerDisplay] {
@@ -703,6 +713,21 @@ mod tests {
             "no selection"
         );
         let Outcome::Picked(picked) = picker.release(Point::new(450.0, 300.0)) else {
+            panic!("the window under the pointer");
+        };
+        assert_eq!(picked.target, CaptureTarget::Window { window_id: 12 });
+    }
+
+    #[test]
+    fn windows_can_arrive_after_the_picker_opens() {
+        let mut picker = Picker::new(PickMode::Window, displays(), Vec::new(), OWN_PID);
+        picker.move_to(Point::new(250.0, 200.0));
+        assert_eq!(picker.highlight(), Highlight::None, "no windows yet");
+
+        picker.set_windows(windows());
+        assert!(matches!(picker.highlight(), Highlight::Window { .. }));
+        picker.press(Point::new(250.0, 200.0));
+        let Outcome::Picked(picked) = picker.release(Point::new(250.0, 200.0)) else {
             panic!("the window under the pointer");
         };
         assert_eq!(picked.target, CaptureTarget::Window { window_id: 12 });

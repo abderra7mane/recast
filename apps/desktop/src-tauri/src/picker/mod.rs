@@ -3,7 +3,7 @@
 pub mod cursor;
 mod overlay;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use objc2::MainThreadMarker;
 use recast_capture::{
@@ -58,6 +58,9 @@ impl PickRequest {
 }
 
 static OPEN: AtomicBool = AtomicBool::new(false);
+/// Numbers each picker, so a window list that arrives late reaches the picker that asked
+/// for it.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 struct OpenGuard;
 
@@ -80,16 +83,7 @@ pub async fn pick(app: &AppHandle, request: PickRequest) -> Result<Option<Pick>,
         return Err("The picker is already open.".into());
     }
     let _guard = OpenGuard;
-    // Listing the windows is slow, and a drag that starts before the overlays show goes
-    // to the app below, so only the mode that picks windows waits for it.
-    let windows = if request.mode == PickMode::Window {
-        tauri::async_runtime::spawn_blocking(|| recast_capture::platform().window_stack())
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?
-    } else {
-        Vec::new()
-    };
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     // A drag that began before the overlays could show, as one can while a menu bar menu
     // closes, belongs to the app below; the overlays wait for it to end.
     tauri::async_runtime::spawn_blocking(|| {
@@ -107,7 +101,7 @@ pub async fn pick(app: &AppHandle, request: PickRequest) -> Result<Option<Pick>,
         overlay::open(
             mtm,
             request,
-            windows,
+            generation,
             own_pid,
             Box::new(move |picked| {
                 let pick = match picked {
@@ -122,8 +116,33 @@ pub async fn pick(app: &AppHandle, request: PickRequest) -> Result<Option<Pick>,
         );
     })
     .map_err(|e| e.to_string())?;
+    // Listing the windows is slow, and a click before the overlays show goes to the app
+    // below, so Window mode loads them while its overlays are already up.
+    if request.mode == PickMode::Window {
+        load_windows(app.clone(), generation);
+    }
     rx.await
         .map_err(|_| "The picker closed unexpectedly.".to_string())
+}
+
+fn load_windows(app: AppHandle, generation: u64) {
+    tauri::async_runtime::spawn(async move {
+        let listed =
+            tauri::async_runtime::spawn_blocking(|| recast_capture::platform().window_stack())
+                .await;
+        match listed {
+            Ok(Ok(windows)) => {
+                let shown = app.run_on_main_thread(move || {
+                    overlay::set_windows(generation, windows);
+                });
+                if let Err(e) = shown {
+                    log::warn!("cannot reach the main thread: {e}");
+                }
+            }
+            Ok(Err(e)) => log::warn!("cannot list the windows to pick from: {e}"),
+            Err(e) => log::warn!("cannot list the windows to pick from: {e}"),
+        }
+    });
 }
 
 /// Hides the Library window so it doesn't cover what the user is picking.
