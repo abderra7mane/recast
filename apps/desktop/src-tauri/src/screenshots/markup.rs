@@ -17,7 +17,7 @@ use recast_render::{bitmap, still::StillRenderer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{
-    AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+    AppHandle, Manager, State, WebviewWindow, Wry,
     ipc::{Invoke, InvokeBody, Request, Response},
 };
 
@@ -238,13 +238,13 @@ pub fn open_window(app: &AppHandle, capture: Arc<Capture>) -> Result<(), String>
         .map_err(|e| e.to_string())?
         .insert(label.clone(), session);
     // Also focuses the window, which the thumbnail can't do as it never activates the app.
-    let window = crate::activation::build(
-        WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+    let window = crate::activation::build(app, &label, |builder| {
+        builder
             .title(&capture.name)
             .inner_size(1280.0, 820.0)
             .min_inner_size(900.0, 560.0)
-            .theme(Some(tauri::Theme::Dark)),
-    )?;
+            .theme(Some(tauri::Theme::Dark))
+    })?;
     let app = app.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {

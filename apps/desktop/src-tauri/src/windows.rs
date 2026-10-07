@@ -1,6 +1,6 @@
 //! The Library, Settings and Onboarding windows; one of each at most.
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager};
 
 pub const LIBRARY: &str = "library";
 pub const SETTINGS: &str = "settings";
@@ -44,13 +44,13 @@ pub fn show(app: &AppHandle, label: &str) -> Result<(), String> {
         return window.set_focus().map_err(|e| e.to_string());
     }
     let spec = spec(label);
-    crate::activation::build(
-        WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+    crate::activation::build(app, label, |builder| {
+        builder
             .title(spec.title)
             .inner_size(spec.size.0, spec.size.1)
             .min_inner_size(spec.min_size.0, spec.min_size.1)
-            .resizable(spec.resizable),
-    )?;
+            .resizable(spec.resizable)
+    })?;
     Ok(())
 }
 

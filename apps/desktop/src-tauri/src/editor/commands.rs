@@ -15,7 +15,7 @@ use recast_export::{ExportRequest, Progress};
 use recast_project::{EditSettings, SoundPack, ZoomSegment};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_specta::Event;
 
 use super::{EditorInit, EditorSession, EditorStatus, PreviewStats, ProjectSummary};
@@ -123,13 +123,13 @@ pub fn open_editor_window(app: &AppHandle, path: &Path) -> Result<(), String> {
             export: None,
         },
     );
-    let window = crate::activation::build(
-        WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+    let window = crate::activation::build(app, &label, |builder| {
+        builder
             .title(title)
             .inner_size(1440.0, 900.0)
             .min_inner_size(1040.0, 660.0)
-            .theme(Some(tauri::Theme::Dark)),
-    )?;
+            .theme(Some(tauri::Theme::Dark))
+    })?;
     let app = app.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {

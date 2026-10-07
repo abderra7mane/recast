@@ -3,7 +3,9 @@
 
 use std::{collections::BTreeSet, sync::Mutex};
 
-use tauri::{ActivationPolicy, AppHandle, Manager, WebviewWindow, WebviewWindowBuilder, Wry};
+use tauri::{
+    ActivationPolicy, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+};
 
 const REGULAR_LABELS: &[&str] = &["library", "settings", "onboarding"];
 const REGULAR_PREFIXES: &[&str] = &[
@@ -55,20 +57,27 @@ fn apply(app: &AppHandle, policy: Option<ActivationPolicy>) {
     }
 }
 
-/// Builds a window and shows Recast in the Dock until the window is destroyed. Every
-/// window is built through here.
-pub fn build<M: Manager<Wry>>(
-    builder: WebviewWindowBuilder<'_, Wry, M>,
+/// Builds the window `label`, configured by `configure`, and shows Recast in the Dock
+/// until the window is destroyed. Every window is built through here.
+///
+/// Recast becomes a regular app before the window exists: macOS puts a window on the
+/// active Space when it is created, and an accessory app's window can join another
+/// app's full-screen Space.
+pub fn build(
+    app: &AppHandle,
+    label: &str,
+    configure: impl FnOnce(
+        WebviewWindowBuilder<'_, Wry, AppHandle>,
+    ) -> WebviewWindowBuilder<'_, Wry, AppHandle>,
 ) -> Result<WebviewWindow, String> {
-    let window = builder.build().map_err(|e| e.to_string())?;
-    track(&window);
-    Ok(window)
-}
-
-fn track(window: &WebviewWindow) {
-    let app = window.app_handle();
-    apply(app, app.state::<Tracker>().opened(window.label()));
+    apply(app, app.state::<Tracker>().opened(label));
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()));
+    let window = configure(builder).build().map_err(|e| {
+        apply(app, app.state::<Tracker>().closed(label));
+        e.to_string()
+    })?;
     let _ = window.set_focus();
+    Ok(window)
 }
 
 pub fn window_destroyed(app: &AppHandle, label: &str) {
@@ -131,15 +140,12 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            let builders = text.matches("WebviewWindowBuilder::new(").count();
-            let tracked = text.matches("activation::build(").count();
-            assert_eq!(
-                builders,
-                tracked,
+            assert!(
+                !text.contains("WebviewWindowBuilder::new("),
                 "{} builds a window without activation::build",
                 path.display()
             );
-            checked += builders;
+            checked += text.matches("activation::build(").count();
         }
         assert_eq!(checked, 3, "library/settings/onboarding, editor and markup");
     }
