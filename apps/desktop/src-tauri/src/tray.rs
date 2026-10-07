@@ -39,7 +39,7 @@ pub fn recent(projects: Vec<ProjectSummary>, count: usize) -> Vec<Recent> {
         .into_iter()
         .take(count)
         .map(|p| {
-            let seconds = (p.duration_ms / 1000.0).round().max(0.0) as u64;
+            let seconds = (p.duration_ms / 1000.0).max(0.0) as u64;
             Recent {
                 label: format!("{}  ({}:{:02})", p.name, seconds / 60, seconds % 60),
                 path: p.path,
@@ -352,8 +352,8 @@ mod tests {
     #[test]
     fn recent_handles_few_or_no_recordings() {
         assert!(recent(Vec::new(), RECENT_COUNT).is_empty());
-        let one = recent(vec![project("Only", 1.0, 400.0)], RECENT_COUNT);
-        assert_eq!(one[0].label, "Only  (0:00)");
+        let one = recent(vec![project("Only", 1.0, 1_800.0)], RECENT_COUNT);
+        assert_eq!(one[0].label, "Only  (0:01)", "like the Library");
     }
 
     #[test]
