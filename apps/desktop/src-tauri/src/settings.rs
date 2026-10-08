@@ -24,7 +24,7 @@ pub struct ScreenshotSettings {
 impl Default for ScreenshotSettings {
     fn default() -> Self {
         Self {
-            copy_to_clipboard: true,
+            copy_to_clipboard: false,
             save_to_disk: true,
             folder: None,
             play_shutter_sound: true,
@@ -265,7 +265,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SettingsStore::load(&dir.path().join(FILE_NAME));
         let settings = store.get();
-        assert!(settings.screenshots.copy_to_clipboard);
+        assert!(!settings.screenshots.copy_to_clipboard);
         assert!(settings.screenshots.save_to_disk);
         assert!(settings.screenshots.play_shutter_sound);
         assert_eq!(settings.beautify, BackgroundSettings::default());
@@ -287,7 +287,7 @@ mod tests {
 
         let reloaded = SettingsStore::load(&path).get();
         assert!(!reloaded.screenshots.save_to_disk);
-        assert!(reloaded.screenshots.copy_to_clipboard);
+        assert!(!reloaded.screenshots.copy_to_clipboard);
         assert_eq!(
             reloaded.beautify.fill,
             BackgroundFill::Solid {
