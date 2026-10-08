@@ -92,7 +92,7 @@ export function ShortcutRecorder({
           <Button
             variant={recording ? "default" : "outline"}
             size="sm"
-            className="min-w-36 font-mono"
+            className="w-40 font-mono"
             aria-label={`${label} shortcut`}
             aria-pressed={recording}
             onClick={() => {
@@ -102,7 +102,7 @@ export function ShortcutRecorder({
           >
             {shown}
           </Button>
-          {shortcut && !recording && (
+          {shortcut && !recording ? (
             <Button
               variant="ghost"
               size="icon-sm"
@@ -111,6 +111,8 @@ export function ShortcutRecorder({
             >
               <X />
             </Button>
+          ) : (
+            <span className="size-8" />
           )}
         </div>
       </div>
