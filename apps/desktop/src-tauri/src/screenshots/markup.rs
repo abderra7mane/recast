@@ -485,6 +485,24 @@ pub async fn markup_finish(
     Ok(written.map(|p| p.display().to_string()))
 }
 
+/// Moves the screenshot to the Trash and closes the window.
+#[tauri::command]
+#[specta::specta]
+pub async fn markup_discard(
+    window: WebviewWindow,
+    markups: State<'_, Markups>,
+) -> Result<(), String> {
+    let session = markups.session(window.label())?;
+    tauri::async_runtime::spawn_blocking(move || session.capture.delete(super::move_to_trash))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("cannot move the screenshot to the Trash: {e}"))?;
+    if let Err(e) = window.close() {
+        log::warn!("cannot close the markup window: {e}");
+    }
+    Ok(())
+}
+
 /// `background`, with the default fill instead of an image that no longer exists.
 fn usable(background: BackgroundSettings) -> BackgroundSettings {
     match &background.fill {

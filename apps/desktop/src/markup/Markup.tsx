@@ -6,6 +6,7 @@ import {
   FolderOpen,
   Maximize2,
   Redo2,
+  Trash2,
   Undo2,
   ZoomIn,
   ZoomOut,
@@ -209,6 +210,7 @@ function Editor({ init, renderer }: { init: MarkupInit; renderer: Renderer }) {
   const tool = useMarkup((s) => s.tool);
   const [status, setStatus] = useState<Status | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
 
   const [actions] = useState(() => {
     const finishWith = async (
@@ -261,6 +263,22 @@ function Editor({ init, renderer }: { init: MarkupInit; renderer: Renderer }) {
   });
   useShortcuts(actions);
 
+  const discard = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const result = await commands.markupDiscard();
+      if (result.status === "error") {
+        setStatus({ text: result.error, error: true });
+      }
+    } catch (e) {
+      setStatus({ text: String(e), error: true });
+    } finally {
+      setBusy(false);
+      setConfirmingDiscard(false);
+    }
+  };
+
   return (
     <div className="bg-background text-foreground flex h-screen flex-col select-none">
       <Toolbar />
@@ -268,6 +286,37 @@ function Editor({ init, renderer }: { init: MarkupInit; renderer: Renderer }) {
         <main className="flex min-w-0 flex-1 flex-col">
           <MarkupCanvas renderer={renderer} />
           <footer className="flex h-12 shrink-0 items-center gap-2 border-t px-3">
+            {confirmingDiscard ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() => void discard()}
+                >
+                  Move to Trash
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => setConfirmingDiscard(false)}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Tip label="Move the screenshot to the Trash and close">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => setConfirmingDiscard(true)}
+                >
+                  <Trash2 /> Discard
+                </Button>
+              </Tip>
+            )}
             <p
               className={
                 status?.error

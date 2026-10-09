@@ -321,6 +321,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             markup::markup_open,
             markup::markup_frame,
             markup::markup_finish,
+            markup::markup_discard,
             editor_commands::list_projects,
             editor_commands::open_editor,
             editor_commands::editor_open,

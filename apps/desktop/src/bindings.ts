@@ -74,6 +74,8 @@ export const commands = {
 	cornerRadius?: number | null,
 	shadow?: Shadow,
 } | null) => typedError<string | null, string>(__TAURI_INVOKE("markup_finish", { action, staged, background })),
+	/**  Moves the screenshot to the Trash and closes the window. */
+	markupDiscard: () => typedError<null, string>(__TAURI_INVOKE("markup_discard")),
 	listProjects: () => typedError<ProjectSummary[], string>(__TAURI_INVOKE("list_projects")),
 	openEditor: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_editor", { path })),
 	/**  Starts the session of the calling editor window (or returns the running one). */
