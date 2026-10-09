@@ -358,10 +358,7 @@ async fn capture(
 /// Picks a target, captures it and shows the thumbnail; `None` when the user cancels.
 pub async fn take(app: &AppHandle, mode: PickMode) -> Result<Option<ScreenshotTaken>, String> {
     let options = app.state::<SettingsStore>().get().screenshots;
-    let library = picker::hide_library(app);
-    let taken = capture(app, options, mode).await;
-    picker::show_library(library);
-    taken
+    capture(app, options, mode).await
 }
 
 #[cfg(test)]

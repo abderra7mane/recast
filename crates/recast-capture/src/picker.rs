@@ -77,9 +77,10 @@ const MIN_WINDOW_POINTS: f64 = 24.0;
 /// How far the pointer moves before a press becomes a drag.
 const DRAG_THRESHOLD: f64 = 3.0;
 
-/// Whether a window can be picked: not ours, not desktop or system UI, not tiny.
+/// Whether a window can be picked: not one of our floating panels, not desktop or
+/// system UI, not tiny.
 pub fn pickable(window: &PickerWindow, own_pid: i32) -> bool {
-    window.pid != own_pid
+    (window.pid != own_pid || window.layer == 0)
         && (0..DOCK_LEVEL).contains(&window.layer)
         && window.bounds.width >= MIN_WINDOW_POINTS
         && window.bounds.height >= MIN_WINDOW_POINTS
@@ -488,11 +489,12 @@ mod tests {
     fn windows() -> Vec<PickerWindow> {
         vec![
             window(10, 1, 25, rect(0.0, 0.0, 1512.0, 24.0)),
-            window(11, OWN_PID, 0, rect(100.0, 100.0, 400.0, 300.0)),
+            window(11, OWN_PID, 0, rect(1100.0, 860.0, 150.0, 100.0)),
             window(12, 2, 0, rect(200.0, 150.0, 600.0, 400.0)),
             window(13, 3, 0, rect(50.0, 50.0, 1000.0, 800.0)),
             window(14, 4, 3, rect(1600.0, 100.0, 300.0, 200.0)),
             window(15, 5, 0, rect(900.0, 900.0, 10.0, 10.0)),
+            window(16, OWN_PID, 3, rect(1600.0, 400.0, 300.0, 200.0)),
         ]
     }
 
@@ -500,7 +502,8 @@ mod tests {
     fn hit_test_takes_the_frontmost_pickable_window() {
         let ws = windows();
         let at = |x, y| window_at(&ws, Point::new(x, y), OWN_PID).map(|w| w.id);
-        assert_eq!(at(150.0, 120.0), Some(13), "own window is skipped");
+        assert_eq!(at(1150.0, 900.0), Some(11), "own windows are pickable");
+        assert_eq!(at(1700.0, 500.0), None, "own floating panels are skipped");
         assert_eq!(at(300.0, 200.0), Some(12), "front window wins");
         assert_eq!(at(10.0, 10.0), None, "menu bar is skipped");
         assert_eq!(at(60.0, 60.0), Some(13));

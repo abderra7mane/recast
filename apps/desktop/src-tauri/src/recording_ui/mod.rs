@@ -121,13 +121,11 @@ pub async fn start(app: AppHandle, mode: PickMode) -> Result<(), String> {
     let flow = app.state::<Flow>();
     flow.begin_pick()?;
     changed(&app);
-    let library = picker::hide_library(&app);
     let picked = picker::pick(
         &app,
         picker::PickRequest::new(mode, picker::Purpose::Record),
     )
     .await;
-    picker::show_library(library);
     let pick = match picked {
         Ok(Some(pick)) => pick,
         other => {

@@ -26,18 +26,6 @@ pub(super) fn rect(r: cg::Rect) -> Rect {
     }
 }
 
-/// The running app entry for this process, so its windows can be excluded from capture.
-pub(super) fn own_apps(content: &sc::ShareableContent) -> arc::R<ns::Array<sc::RunningApp>> {
-    let pid = std::process::id() as i32;
-    let apps: Vec<arc::R<sc::RunningApp>> = content
-        .apps()
-        .iter()
-        .filter(|app| app.process_id() == pid)
-        .map(|app| app.retained())
-        .collect();
-    ns::Array::from_slice_retained(&apps)
-}
-
 pub(super) fn display_scale(display: &sc::Display) -> f64 {
     let filter = sc::ContentFilter::with_display_excluding_windows(display, &ns::Array::new());
     sc::ShareableContent::info_for_filter(&filter).point_pixel_scale() as f64
@@ -157,14 +145,9 @@ pub(super) struct Source {
     pub window: Option<arc::R<sc::Window>>,
 }
 
-/// Display and region filters leave out this app's windows.
 pub(super) fn source(content: &sc::ShareableContent, target: &CaptureTarget) -> Result<Source> {
     let display_filter = |display: &sc::Display| {
-        sc::ContentFilter::with_display_excluding_apps_excepting_windows(
-            display,
-            &own_apps(content),
-            &ns::Array::new(),
-        )
+        sc::ContentFilter::with_display_excluding_windows(display, &ns::Array::new())
     };
     let scale = |filter: &sc::ContentFilter| {
         sc::ShareableContent::info_for_filter(filter).point_pixel_scale() as f64

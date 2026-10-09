@@ -10,7 +10,7 @@ use recast_capture::{
     ScreenCapture,
     picker::{PickMode, Picked, Picker, PickerDisplay, PickerWindow},
 };
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::AppHandle;
 
 use crate::focus::Focus;
 
@@ -143,21 +143,6 @@ fn load_windows(app: AppHandle, generation: u64) {
             Err(e) => log::warn!("cannot list the windows to pick from: {e}"),
         }
     });
-}
-
-/// Hides the Library window so it doesn't cover what the user is picking.
-pub fn hide_library(app: &AppHandle) -> Option<WebviewWindow> {
-    let library = app
-        .get_webview_window(crate::windows::LIBRARY)
-        .filter(|w| w.is_visible().unwrap_or(false))?;
-    let _ = library.hide();
-    Some(library)
-}
-
-pub fn show_library(library: Option<WebviewWindow>) {
-    if let Some(library) = library {
-        let _ = library.show();
-    }
 }
 
 #[cfg(test)]
