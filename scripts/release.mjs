@@ -7,8 +7,9 @@
 //     Prints the Tauri config overrides of a release build: updater artifacts on,
 //     the endpoint from UPDATER_ENDPOINT and the public key from UPDATER_PUBKEY.
 //   node scripts/release.mjs assets <owner/repo> <out-dir>
-//     Copies the DMG and the signed updater archive to <out-dir> and writes the
-//     updater manifest latest.json and the release notes notes.md next to them.
+//     Copies the DMG of each build and the signed updater archives of the Apple
+//     Silicon and Intel builds to <out-dir> and writes the updater manifest
+//     latest.json and the release notes notes.md next to them.
 
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -19,8 +20,14 @@ const tauriConfig = JSON.parse(
   readFileSync(join(root, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"),
 );
 const version = tauriConfig.version;
-const bundleDir = process.env.BUNDLE_DIR ?? join(root, "target/release/bundle");
-const ARCH = "aarch64";
+const targetDir = process.env.TARGET_DIR ?? join(root, "target");
+// The universal build ships only as a DMG; its installs update to the build of
+// their own architecture.
+const BUILDS = [
+  { name: "aarch64", target: "aarch64-apple-darwin", updater: "darwin-aarch64" },
+  { name: "x86_64", target: "x86_64-apple-darwin", updater: "darwin-x86_64" },
+  { name: "universal", target: "universal-apple-darwin" },
+];
 
 function fail(message) {
   console.error(`release: ${message}`);
@@ -61,7 +68,11 @@ function only(dir, suffix) {
 }
 
 function notes() {
-  return `Recast ${version} for Apple Silicon Macs running macOS 14 or later.
+  return `Recast ${version} for Macs running macOS 14 or later. Download the DMG for your Mac:
+
+- \`Recast_${version}_aarch64.dmg\`: Apple Silicon (M1 and later).
+- \`Recast_${version}_x86_64.dmg\`: Intel.
+- \`Recast_${version}_universal.dmg\`: both, at about twice the size.
 
 Recast is not notarized. The first time you open it, macOS blocks it:
 
@@ -76,24 +87,28 @@ Updates from inside Recast install without these steps.
 function assets(repo, outDir) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? "")) fail("pass the releases repo as owner/repo");
   mkdirSync(outDir, { recursive: true });
-  const archiveName = `Recast_${version}_${ARCH}.app.tar.gz`;
-  const dmgName = `Recast_${version}_${ARCH}.dmg`;
-  const archive = only(join(bundleDir, "macos"), ".app.tar.gz");
-  const signature = readFileSync(`${archive}.sig`, "utf8").trim();
-  copyFileSync(archive, join(outDir, archiveName));
-  copyFileSync(`${archive}.sig`, join(outDir, `${archiveName}.sig`));
-  copyFileSync(only(join(bundleDir, "dmg"), ".dmg"), join(outDir, dmgName));
+  const platforms = {};
+  for (const { name, target, updater } of BUILDS) {
+    const bundleDir = join(targetDir, target, "release/bundle");
+    copyFileSync(only(join(bundleDir, "dmg"), ".dmg"), join(outDir, `Recast_${version}_${name}.dmg`));
+    if (!updater) continue;
 
-  const url = `https://github.com/${repo}/releases/download/v${version}/${archiveName}`;
-  const platform = { signature, url };
+    const archiveName = `Recast_${version}_${name}.app.tar.gz`;
+    const archive = only(join(bundleDir, "macos"), ".app.tar.gz");
+    const signature = readFileSync(`${archive}.sig`, "utf8").trim();
+    copyFileSync(archive, join(outDir, archiveName));
+    copyFileSync(`${archive}.sig`, join(outDir, `${archiveName}.sig`));
+
+    const url = `https://github.com/${repo}/releases/download/v${version}/${archiveName}`;
+    platforms[updater] = { signature, url };
+    platforms[`${updater}-app`] = { signature, url };
+  }
+
   const manifest = {
     version,
     notes: `Recast ${version}`,
     pub_date: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
-    platforms: {
-      [`darwin-${ARCH}`]: platform,
-      [`darwin-${ARCH}-app`]: platform,
-    },
+    platforms,
   };
   writeFileSync(join(outDir, "latest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(join(outDir, "notes.md"), notes());

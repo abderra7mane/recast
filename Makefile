@@ -26,7 +26,7 @@ help:
 	@echo "updater-key generate the updater signing key pair in ~/.tauri/recast.key and print its public key"
 	@echo "lint-workflows check the GitHub Actions workflows with actionlint"
 	@echo "release-check   CI: check that TAG matches the app version"
-	@echo "release-bundle  CI: build the ad-hoc signed app, DMG and signed updater archive"
+	@echo "release-bundle  CI: build the ad-hoc signed app, DMG and signed updater archive for each release target"
 	@echo "release-assets  CI: collect the release files and latest.json: make release-assets REPO=owner/repo"
 
 install:
@@ -121,6 +121,7 @@ lint-workflows:
 	@if command -v actionlint >/dev/null; then actionlint; else echo "actionlint is not installed, skipping (brew install actionlint)."; fi
 
 RELEASE_CONFIG := $(CURDIR)/target/release.conf.json
+RELEASE_TARGETS := aarch64-apple-darwin x86_64-apple-darwin universal-apple-darwin
 
 release-check:
 	node scripts/release.mjs check-version "$(TAG)"
@@ -130,7 +131,9 @@ release-check:
 release-bundle: install bindings
 	@mkdir -p target
 	node scripts/release.mjs config > "$(RELEASE_CONFIG)"
-	APPLE_SIGNING_IDENTITY=- $(PNPM) tauri build --bundles app,dmg --config "$(RELEASE_CONFIG)"
+	for target in $(RELEASE_TARGETS); do \
+		APPLE_SIGNING_IDENTITY=- $(PNPM) tauri build --bundles app,dmg --target $$target --config "$(RELEASE_CONFIG)" || exit 1; \
+	done
 
 release-assets:
 	node scripts/release.mjs assets "$(REPO)" target/release-assets
