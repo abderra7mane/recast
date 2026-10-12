@@ -8,6 +8,7 @@ import { forwardToLogFile } from "@/logging";
 import { Markup } from "@/markup/Markup";
 import { Onboarding } from "@/onboarding/Onboarding";
 import { Settings } from "@/settings/Settings";
+import { Update } from "@/update/Update";
 
 import "@/styles/styles.css";
 
@@ -24,6 +25,7 @@ function view(label: string) {
   if (label.startsWith("markup-")) return <Markup />;
   if (label === "settings") return <Settings />;
   if (label === "onboarding") return <Onboarding />;
+  if (label === "update") return <Update />;
   return <Library />;
 }
 

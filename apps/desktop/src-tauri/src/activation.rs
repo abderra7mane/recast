@@ -7,7 +7,7 @@ use tauri::{
     ActivationPolicy, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
-const REGULAR_LABELS: &[&str] = &["library", "settings", "onboarding"];
+const REGULAR_LABELS: &[&str] = &["library", "settings", "onboarding", "update"];
 const REGULAR_PREFIXES: &[&str] = &[
     crate::editor::commands::LABEL_PREFIX,
     crate::screenshots::markup::LABEL_PREFIX,
@@ -113,7 +113,14 @@ mod tests {
 
     #[test]
     fn every_regular_window_counts() {
-        for label in ["library", "settings", "onboarding", "editor-12", "markup-1"] {
+        for label in [
+            "library",
+            "settings",
+            "onboarding",
+            "update",
+            "editor-12",
+            "markup-1",
+        ] {
             let tracker = Tracker::default();
             assert!(
                 is(tracker.opened(label), ActivationPolicy::Regular),

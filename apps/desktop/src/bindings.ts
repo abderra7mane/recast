@@ -53,6 +53,13 @@ export const commands = {
 	setLaunchAtLogin: (enabled: boolean) => typedError<LoginItem, string>(__TAURI_INVOKE("set_launch_at_login", { enabled })),
 	openLoginItemsSettings: () => __TAURI_INVOKE<void>("open_login_items_settings"),
 	checkForUpdates: () => __TAURI_INVOKE<void>("check_for_updates"),
+	updateStatus: () => typedError<UpdateStatus, string>(__TAURI_INVOKE("update_status")),
+	/**
+	 *  Downloads and installs the pending update, then relaunches Recast. Progress
+	 *  arrives as `UpdateProgress` events.
+	 */
+	installUpdate: () => typedError<null, string>(__TAURI_INVOKE("install_update")),
+	dismissUpdate: () => typedError<null, string>(__TAURI_INVOKE("dismiss_update")),
 	appInfo: () => __TAURI_INVOKE<AppInfo>("app_info"),
 	openLogsFolder: () => __TAURI_INVOKE<void>("open_logs_folder"),
 	copyDiagnostics: () => typedError<null, string>(__TAURI_INVOKE("copy_diagnostics")),
@@ -109,6 +116,8 @@ export const events = {
 	exportFinished: makeEvent<ExportFinished>("export-finished"),
 	exportProgress: makeEvent<ExportProgress>("export-progress"),
 	recordingChanged: makeEvent<RecordingChanged>("recording-changed"),
+	updateProgress: makeEvent<UpdateProgress>("update-progress"),
+	updateStatusChanged: makeEvent<UpdateStatusChanged>("update-status-changed"),
 };
 
 /* Types */
@@ -455,8 +464,31 @@ export type UnfinishedBundle = {
 	problem: string | null,
 };
 
+export type UpdateInfo = {
+	version: string,
+	currentVersion: string,
+	notes: string | null,
+};
+
+/**
+ *  Bytes of the update downloaded so far; `total` is unknown when the server
+ *  doesn't send a length.
+ */
+export type UpdateProgress = {
+	downloaded: number,
+	total: number | null,
+};
+
 export type UpdateSettings = {
 	checkAutomatically?: boolean,
+};
+
+export type UpdateStatus = ({ kind: "checking" }) & { error?: never; version?: never } | {
+	kind: "available",
+} & UpdateInfo | ({ kind: "upToDate"; version: string }) & { error?: never } | ({ kind: "notConfigured" }) & { error?: never; version?: never } | ({ kind: "failed"; error: string }) & { version?: never };
+
+export type UpdateStatusChanged = {
+	status: UpdateStatus,
 };
 
 export type VideoTrack = {

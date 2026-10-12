@@ -284,7 +284,9 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         .events(collect_events![
             ExportProgress,
             ExportFinished,
-            RecordingChanged
+            RecordingChanged,
+            updates::UpdateProgress,
+            updates::UpdateStatusChanged
         ])
         .commands(collect_commands![
             check_permissions,
@@ -313,6 +315,9 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             login_item::set_launch_at_login,
             login_item::open_login_items_settings,
             check_for_updates,
+            updates::update_status,
+            updates::install_update,
+            updates::dismiss_update,
             app_info,
             open_logs_folder,
             copy_diagnostics,
@@ -426,6 +431,7 @@ pub fn run() {
         .manage(activation::Tracker::default())
         .manage(hotkeys::Hotkeys::default())
         .manage(tray::TrayState::default())
+        .manage(updates::Pending::default())
         .invoke_handler(markup::with_raw_commands(builder.invoke_handler()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

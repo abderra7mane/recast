@@ -6,6 +6,7 @@
     "library",
     "settings",
     "onboarding",
+    "update",
     "editor-*",
     "markup-*"
   ],

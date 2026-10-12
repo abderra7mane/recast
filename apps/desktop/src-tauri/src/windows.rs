@@ -1,10 +1,11 @@
-//! The Library, Settings and Onboarding windows; one of each at most.
+//! The Library, Settings, Onboarding and Update windows; one of each at most.
 
 use tauri::{AppHandle, Manager};
 
 pub const LIBRARY: &str = "library";
 pub const SETTINGS: &str = "settings";
 pub const ONBOARDING: &str = "onboarding";
+pub const UPDATE: &str = "update";
 
 struct Spec {
     title: &'static str,
@@ -25,6 +26,12 @@ fn spec(label: &str) -> Spec {
             title: "Welcome to Recast",
             size: (560.0, 600.0),
             min_size: (560.0, 600.0),
+            resizable: false,
+        },
+        UPDATE => Spec {
+            title: "Software Update",
+            size: (520.0, 400.0),
+            min_size: (520.0, 400.0),
             resizable: false,
         },
         _ => Spec {
