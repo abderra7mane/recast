@@ -53,8 +53,10 @@ pub async fn relaunch(app: AppHandle) -> Result<(), String> {
         app.request_restart();
         return Ok(());
     };
+    // Launch Services can still list Recast as running just after it exits, which turns a
+    // plain `open` into a no-op; `-n` launches regardless.
     let script = format!(
-        "while /bin/kill -0 {} 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$0\"",
+        "while /bin/kill -0 {} 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open -n \"$0\"",
         std::process::id()
     );
     std::process::Command::new("/bin/sh")
