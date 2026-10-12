@@ -73,8 +73,26 @@ fn sdf_circle(px: f64, py: f64, cx: f64, cy: f64, r: f64) -> f64 {
     (px - cx).hypot(py - cy) - r
 }
 
+/// Distance to a line from `a` to `b` with round ends of radius `r`.
+fn sdf_capsule(p: (f64, f64), a: (f64, f64), b: (f64, f64), r: f64) -> f64 {
+    let (pa, ba) = ((p.0 - a.0, p.1 - a.1), (b.0 - a.0, b.1 - a.1));
+    let t = ((pa.0 * ba.0 + pa.1 * ba.1) / (ba.0 * ba.0 + ba.1 * ba.1)).clamp(0.0, 1.0);
+    (pa.0 - ba.0 * t).hypot(pa.1 - ba.1 * t) - r
+}
+
+/// A download arrow over a bar in the bottom-right corner.
+fn sdf_update_badge(px: f64, py: f64) -> f64 {
+    let p = (px, py);
+    let (x, top, tip, bar, r) = (14.25, 9.25, 14.25, 17.1, 0.85);
+    sdf_capsule(p, (x, top), (x, tip), r)
+        .min(sdf_capsule(p, (x - 2.6, tip - 2.6), (x, tip), r))
+        .min(sdf_capsule(p, (x + 2.6, tip - 2.6), (x, tip), r))
+        .min(sdf_capsule(p, (x - 2.6, bar), (x + 2.6, bar), r))
+}
+
 /// Template images (black with alpha): a record button, or a stop button while recording.
-pub fn icon_pixels(recording: bool) -> Vec<u8> {
+/// An available update badges the record button.
+pub fn icon_pixels(recording: bool, update: bool) -> Vec<u8> {
     let scale = ICON_PX as f64 / 18.0;
     let mut pixels = Vec::with_capacity(ICON_PX * ICON_PX * 4);
     for y in 0..ICON_PX {
@@ -89,7 +107,12 @@ pub fn icon_pixels(recording: bool) -> Vec<u8> {
             } else {
                 let ring = cover((sdf_circle(px, py, 9.0, 9.0, 7.25)).abs() - 0.75);
                 let dot = cover(sdf_circle(px, py, 9.0, 9.0, 4.0));
-                ring.max(dot)
+                if update {
+                    let badge = sdf_update_badge(px, py);
+                    (ring.max(dot) * (1.0 - cover(badge - 1.0))).max(cover(badge))
+                } else {
+                    ring.max(dot)
+                }
             };
             pixels.extend_from_slice(&[0, 0, 0, (alpha * 255.0).round() as u8]);
         }
@@ -97,8 +120,12 @@ pub fn icon_pixels(recording: bool) -> Vec<u8> {
     pixels
 }
 
-fn icon(recording: bool) -> Image<'static> {
-    Image::new_owned(icon_pixels(recording), ICON_PX as u32, ICON_PX as u32)
+fn icon(recording: bool, update: bool) -> Image<'static> {
+    Image::new_owned(
+        icon_pixels(recording, update),
+        ICON_PX as u32,
+        ICON_PX as u32,
+    )
 }
 
 fn menu_id(action: ShortcutAction) -> &'static str {
@@ -260,7 +287,12 @@ fn build_menu(app: &AppHandle, phase: &Phase) -> tauri::Result<Menu<tauri::Wry>>
         true,
         Some("Cmd+Comma".into()),
     )?)?;
-    menu.append(&item(app, "updates", "Check for Updates…", true, None)?)?;
+    let updates = if crate::updates::available() {
+        "Update Available…"
+    } else {
+        "Check for Updates…"
+    };
+    menu.append(&item(app, "updates", updates, true, None)?)?;
     menu.append(&separator()?)?;
     menu.append(&item(
         app,
@@ -275,7 +307,7 @@ fn build_menu(app: &AppHandle, phase: &Phase) -> tauri::Result<Menu<tauri::Wry>>
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let phase = app.state::<Flow>().phase();
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon(false))
+        .icon(icon(false, crate::updates::available()))
         .icon_as_template(true)
         .tooltip("Recast")
         .menu(&build_menu(app, &phase)?)
@@ -297,7 +329,7 @@ pub fn refresh(app: &AppHandle) {
         Phase::Recording { .. } | Phase::Countdown | Phase::Starting
     );
     if let Err(e) = tray
-        .set_icon(Some(icon(active)))
+        .set_icon(Some(icon(active, crate::updates::available())))
         .and_then(|_| tray.set_icon_as_template(true))
         .and_then(|_| tray.set_show_menu_on_left_click(!active))
     {
@@ -494,8 +526,8 @@ mod tests {
 
     #[test]
     fn icons_differ_while_recording() {
-        let idle = icon_pixels(false);
-        let recording = icon_pixels(true);
+        let idle = icon_pixels(false, false);
+        let recording = icon_pixels(true, false);
         assert_eq!(idle.len(), ICON_PX * ICON_PX * 4);
         let alpha = |pixels: &[u8], x: usize, y: usize| pixels[(y * ICON_PX + x) * 4 + 3];
         let c = ICON_PX / 2;
@@ -506,6 +538,22 @@ mod tests {
         assert!(
             idle.chunks(4).all(|p| p[..3] == [0, 0, 0]),
             "template images are black"
+        );
+    }
+
+    #[test]
+    fn an_update_badges_the_idle_icon() {
+        let idle = icon_pixels(false, false);
+        let badged = icon_pixels(false, true);
+        let alpha = |pixels: &[u8], x: usize, y: usize| pixels[(y * ICON_PX + x) * 4 + 3];
+        let (arrow_x, bar_y) = (27, 33);
+        assert_eq!(alpha(&idle, arrow_x, bar_y), 0);
+        assert_eq!(alpha(&badged, arrow_x, bar_y), 255, "bar under the arrow");
+        assert_eq!(alpha(&badged, 18, 18), 255, "record dot kept");
+        assert_eq!(
+            icon_pixels(true, true),
+            icon_pixels(true, false),
+            "no badge while recording"
         );
     }
 }

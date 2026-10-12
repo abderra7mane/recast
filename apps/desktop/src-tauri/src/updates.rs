@@ -11,6 +11,18 @@ use tauri_plugin_updater::UpdaterExt;
 const PLACEHOLDERS: &[&str] = &["<owner>", "REPLACE_WITH_UPDATER_PUBLIC_KEY"];
 
 static CHECKING: AtomicBool = AtomicBool::new(false);
+static AVAILABLE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the last check found an update that is not installed yet.
+pub fn available() -> bool {
+    AVAILABLE.load(Ordering::Relaxed)
+}
+
+fn set_available(app: &AppHandle, available: bool) {
+    if AVAILABLE.swap(available, Ordering::Relaxed) != available {
+        crate::tray::refresh(app);
+    }
+}
 
 /// Whether the updater config has a real endpoint and public key.
 pub fn configured(updater: Option<&serde_json::Value>) -> bool {
@@ -70,6 +82,7 @@ async fn run(app: &AppHandle, manual: bool) -> Result<(), String> {
     let updater = app.updater().map_err(|e| e.to_string())?;
     let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
         log::info!("Recast is up to date");
+        set_available(app, false);
         if manual {
             tell(
                 app,
@@ -81,6 +94,7 @@ async fn run(app: &AppHandle, manual: bool) -> Result<(), String> {
         return Ok(());
     };
     log::info!("update {} is available", update.version);
+    set_available(app, true);
     let mut text = format!(
         "Recast {} is available. You have {}.",
         update.version, update.current_version
