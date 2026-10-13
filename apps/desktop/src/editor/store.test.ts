@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { segment, settings } from "@/editor/fixtures.test-util";
-import { createEditorStore, visibleSegments } from "@/editor/store";
+import {
+  annotation,
+  box,
+  segment,
+  settings,
+} from "@/editor/fixtures.test-util";
+import {
+  createEditorStore,
+  redoIn,
+  undoIn,
+  visibleSegments,
+} from "@/editor/store";
 
 function loaded() {
   const store = createEditorStore();
@@ -128,5 +138,108 @@ describe("editor store", () => {
       startMs: 500,
       endMs: 9000,
     });
+  });
+
+  it("adds an annotation at the playhead, selects it and undoes it", () => {
+    const store = loaded();
+    const id = store.getState().addAnnotation(box(), 2000)!;
+    const state = store.getState();
+    expect(state.selectedAnnotation).toBe(id);
+    expect(state.settings!.annotations.items).toEqual([
+      { id, shape: box(), track: 0, startMs: 2000, endMs: 5000 },
+    ]);
+    undoIn(store);
+    expect(store.getState().settings!.annotations.items).toEqual([]);
+    expect(store.getState().selectedAnnotation).toBeNull();
+    redoIn(store);
+    expect(store.getState().settings!.annotations.items).toHaveLength(1);
+  });
+
+  it("puts an annotation on a new track when the active one is busy", () => {
+    const store = loaded();
+    store.getState().update("annotations", {
+      items: [annotation("a", 0, 10_000)],
+    });
+    const id = store.getState().addAnnotation(box(), 1000)!;
+    expect(store.getState().settings!.annotations.tracks).toBe(2);
+    expect(store.getState().activeTrack).toBe(1);
+    expect(
+      store.getState().settings!.annotations.items.find((a) => a.id === id)
+        ?.track,
+    ).toBe(1);
+  });
+
+  it("restyles the selected annotation and remembers the style", () => {
+    const store = loaded();
+    store.getState().update("annotations", {
+      items: [annotation("a", 0, 1000)],
+    });
+    store.getState().selectAnnotation("a");
+    store.getState().setStyle({ color: "#34c759", width: 6 });
+    expect(store.getState().settings!.annotations.items[0].shape).toEqual({
+      ...box(),
+      color: "#34c759",
+      width: 6,
+    });
+    expect(store.getState().style.width).toBe(6);
+  });
+
+  it("makes a drag on the preview one undo step and shows the result", () => {
+    const store = loaded();
+    store.getState().update("annotations", {
+      items: [annotation("a", 0, 1000)],
+    });
+    store.getState().beginGesture();
+    store.getState().setHidden("a");
+    store.getState().setAnnotationShape("a", box(50, 60));
+    expect(store.getState().hidden).toBeNull();
+    store.getState().endGesture();
+    expect(history(store).pastStates).toHaveLength(2);
+    history(store).undo();
+    expect(store.getState().settings!.annotations.items[0].shape).toEqual(
+      box(),
+    );
+  });
+
+  it("selects either a zoom segment or an annotation", () => {
+    const store = loaded();
+    store.getState().update("annotations", {
+      items: [annotation("a", 0, 1000)],
+    });
+    store.getState().select(1);
+    store.getState().selectAnnotation("a");
+    expect(store.getState().selected).toBeNull();
+    store.getState().select(0);
+    expect(store.getState().selectedAnnotation).toBeNull();
+  });
+
+  it("deletes annotations and tracks", () => {
+    const store = loaded();
+    store.getState().update("annotations", {
+      tracks: 3,
+      items: [annotation("a", 0, 1000, 0), annotation("b", 0, 1000, 2)],
+    });
+    store.getState().selectAnnotation("b");
+    store.getState().deleteTrack(2);
+    expect(store.getState().settings!.annotations).toEqual({
+      tracks: 2,
+      items: [annotation("a", 0, 1000, 0)],
+    });
+    expect(store.getState().selectedAnnotation).toBeNull();
+    store.getState().deleteAnnotation("a");
+    expect(store.getState().settings!.annotations.items).toEqual([]);
+    store.getState().addTrack();
+    expect(store.getState().settings!.annotations.tracks).toBe(3);
+  });
+
+  it("records no undo step for a gesture that ends where it began", () => {
+    const store = loaded();
+    const before = store.getState().settings;
+    store.getState().beginGesture();
+    const id = store.getState().addAnnotation(box(), 1000)!;
+    store.getState().deleteAnnotation(id);
+    store.getState().endGesture();
+    expect(history(store).pastStates).toHaveLength(0);
+    expect(store.getState().settings).toBe(before);
   });
 });

@@ -88,11 +88,17 @@ export const commands = {
 	/**  Starts the session of the calling editor window (or returns the running one). */
 	editorOpen: () => typedError<EditorInit, string>(__TAURI_INVOKE("editor_open")),
 	/**
-	 *  Applies edits to the preview and saves them; returns the auto zoom segments.
-	 *  `seq` increases with every call; a call that arrives after a newer one is
-	 *  ignored and returns `None`.
+	 *  Applies edits to the preview, leaving out the annotation `hidden`, and saves them;
+	 *  returns the auto zoom segments and the annotations whose image is missing. `seq`
+	 *  increases with every call; a call that arrives after a newer one is ignored and
+	 *  returns `None`.
 	 */
-	editorSetSettings: (settings: EditSettings, seq: number) => typedError<ZoomSegment[] | null, string>(__TAURI_INVOKE("editor_set_settings", { settings, seq })),
+	editorSetSettings: (settings: EditSettings, hidden: string | null, seq: number) => typedError<{
+	/**  Segments auto zoom generates for the settings. */
+	autoSegments: ZoomSegment[],
+	/**  Annotations whose image the editor has to send. */
+	missingRasters: string[],
+} | null, string>(__TAURI_INVOKE("editor_set_settings", { settings, hidden, seq })),
 	editorPlay: () => typedError<null, string>(__TAURI_INVOKE("editor_play")),
 	editorPause: () => typedError<null, string>(__TAURI_INVOKE("editor_pause")),
 	editorSeek: (tMs: number | null, seq: number) => typedError<null, string>(__TAURI_INVOKE("editor_seek", { tMs, seq })),
@@ -121,6 +127,33 @@ export const events = {
 };
 
 /* Types */
+/**  A shape shown from `start_ms` to `end_ms` on the recording's timeline, both included. */
+export type Annotation = {
+	id: string,
+	startMs: number | null,
+	endMs: number | null,
+	/**  Index of its track; later tracks are drawn on top. */
+	track: number,
+	shape: AnnotationShape,
+};
+
+/**
+ *  What an annotation draws. Positions and sizes are in points on the recorded area,
+ *  so annotations zoom and pan with the recording.
+ */
+export type AnnotationShape = { kind: "arrow"; from: Point; to: Point; color: Color; width: number | null } | { kind: "line"; from: Point; to: Point; color: Color; width: number | null } | { kind: "rect"; rect: Rect; color: Color; width: number | null; fill: boolean } | { kind: "ellipse"; rect: Rect; color: Color; width: number | null; fill: boolean } | { kind: "highlight"; rect: Rect; color: Color } | 
+/**  Hides the recording under it with cells `block` points wide. */
+{ kind: "blur"; rect: Rect; block?: number | null } | { kind: "pixelate"; rect: Rect; block?: number | null } | 
+/**  `at` is the top-left corner of the first line. */
+{ kind: "text"; at: Point; text: string; color: Color; fontSize: number | null };
+
+export type Annotations = {
+	/**  How many tracks the timeline shows, empty ones included. */
+	tracks?: number,
+	/**  Sorted by track, then by start. */
+	items?: Annotation[],
+};
+
 export type AppInfo = {
 	version: string,
 	logsDir: string,
@@ -208,6 +241,7 @@ export type EditSettings = {
 	audio?: AudioMix,
 	trim?: Trim,
 	export?: ExportSettings,
+	annotations?: Annotations,
 };
 
 export type EditorInit = {
@@ -218,6 +252,8 @@ export type EditorInit = {
 	durationMs: number | null,
 	/**  Segments auto zoom generates at the saved zoom level. */
 	autoSegments: ZoomSegment[],
+	/**  Annotations whose image the editor has to send. */
+	missingRasters: string[],
 	/**  Button presses inside the recorded area. */
 	clicks: ClickMarker[],
 	/**  WebSocket URL of the preview stream, including its token. */
@@ -310,6 +346,12 @@ export type PickMode =
 "window" | 
 /**  The display under the pointer is highlighted; a click picks it. */
 "display";
+
+/**  A position on the recorded area, in points from its top-left corner. */
+export type Point = {
+	x: number | null,
+	y: number | null,
+};
 
 export type PreviewStats = {
 	frames: number,
@@ -408,6 +450,13 @@ export type ScreenshotTaken = {
 	copied: boolean,
 	/**  Problems that didn't stop the capture, such as a failed clipboard copy. */
 	warnings: string[],
+};
+
+export type SettingsApplied = {
+	/**  Segments auto zoom generates for the settings. */
+	autoSegments: ZoomSegment[],
+	/**  Annotations whose image the editor has to send. */
+	missingRasters: string[],
 };
 
 /**  Sizes are fractions of the screen's shorter side. */

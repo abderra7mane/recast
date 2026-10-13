@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Pause, Play, Redo2, Repeat, Undo2 } from "lucide-react";
 import { cn } from "cn";
 import { useStore } from "zustand";
@@ -6,6 +7,16 @@ import { useStore } from "zustand";
 import { commands, type EditorInit } from "@/bindings";
 import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  AnnotationLayer,
+  type AnnotationLayerHandle,
+} from "@/editor/annotations/AnnotationLayer";
+import {
+  createRasterUploader,
+  type RasterUploader,
+} from "@/editor/annotations/raster";
+import { AnnotationToolbar } from "@/editor/annotations/Toolbar";
+import { ANNOTATION_TOOLS } from "@/editor/annotations/tools";
 import { ExportDialog } from "@/editor/ExportDialog";
 import { Inspector, type InspectorTab } from "@/editor/inspector/Inspector";
 import {
@@ -22,43 +33,78 @@ import {
   formatTime,
   type Settings,
 } from "@/editor/settings";
-import { editorStore, redo, undo, useEditor } from "@/editor/store";
+import {
+  annotationById,
+  editorStore,
+  redo,
+  undo,
+  useEditor,
+} from "@/editor/store";
 import { createSequence, createSettingsSync } from "@/editor/sync";
 import { Timeline } from "@/editor/Timeline";
 import { isTyping } from "@/editor/keys";
 import { Tip } from "@/editor/Tip";
+import { measureText } from "@/markup/render";
+import { makeCanvas } from "@/markup/session";
 
-/** Sends edits to the backend; returns a function that waits until all are applied. */
-function useSettingsSync() {
+type Edits = { settings: Settings; hidden: string | null };
+
+/**
+ * Sends edits, and which annotation the preview leaves out, to the backend, and the
+ * annotation images it asks for; returns a function that waits until all are applied.
+ */
+function useSettingsSync(uploader: RasterUploader) {
   const flush = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     let inflight: Promise<unknown> = Promise.resolve();
     const sequence = createSequence();
-    const sync = createSettingsSync<Settings>((settings) => {
+    const sync = createSettingsSync<Edits>(({ settings, hidden }) => {
       const seq = sequence.next();
-      inflight = commands.editorSetSettings(settings, seq).then((result) => {
-        if (result.status === "ok" && result.data && sequence.accept(seq)) {
-          editorStore.getState().setAutoSegments(complete(result.data));
-        }
-      });
+      playbackStore.setState({ editsSent: seq });
+      inflight = commands
+        .editorSetSettings(settings, hidden, seq)
+        .then((result) => {
+          if (result.status === "ok" && result.data && sequence.accept(seq)) {
+            const { autoSegments, missingRasters } = result.data;
+            editorStore.getState().setAutoSegments(complete(autoSegments));
+            uploader.upload(missingRasters);
+          }
+        });
     }, 100);
     const unsubscribe = editorStore.subscribe((state, prev) => {
       if (prev.gesture && !state.gesture) sync.flush();
-      if (!state.settings || !prev.settings || state.settings === prev.settings)
-        return;
-      if (state.lastChange === "live") sync.schedule(state.settings);
-      else sync.commit(state.settings);
+      if (!state.settings || !prev.settings) return;
+      const edits = { settings: state.settings, hidden: state.hidden };
+      if (state.hidden !== prev.hidden) sync.commit(edits);
+      else if (state.settings === prev.settings) return;
+      else if (state.lastChange === "live") sync.schedule(edits);
+      else sync.commit(edits);
     });
     flush.current = async () => {
       sync.flush();
       await inflight;
+      await uploader.flush();
     };
     return () => {
       sync.flush();
       unsubscribe();
     };
-  }, []);
+  }, [uploader]);
   return flush;
+}
+
+/** Draws annotation images with the screenshot editor's code and sends them. */
+function useRasterUploader(pxPerPt: () => number) {
+  return useMemo(() => {
+    const measuring = makeCanvas(1, 1).ctx;
+    return createRasterUploader({
+      send: (body) => invoke("editor_annotation_raster", body),
+      shapeOf: (id) => annotationById(editorStore.getState(), id)?.shape,
+      pxPerPt,
+      makeCanvas,
+      measure: (shape) => measureText(measuring, shape, 1),
+    });
+  }, [pxPerPt]);
 }
 
 function useShortcuts(durationMs: number) {
@@ -91,10 +137,30 @@ function useShortcuts(durationMs: number) {
         e.preventDefault();
         step(1);
       } else if (e.key === "Delete" || e.key === "Backspace") {
-        const { selected, deleteSegment } = editorStore.getState();
-        if (selected !== null) {
+        const {
+          selected,
+          deleteSegment,
+          selectedAnnotation,
+          deleteAnnotation,
+        } = editorStore.getState();
+        if (selectedAnnotation !== null) {
+          e.preventDefault();
+          deleteAnnotation(selectedAnnotation);
+        } else if (selected !== null) {
           e.preventDefault();
           deleteSegment(selected);
+        }
+      } else if (e.key === "Escape") {
+        const { tool, setTool, selectAnnotation } = editorStore.getState();
+        if (tool !== "select") setTool("select");
+        else selectAnnotation(null);
+      } else if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        const picked = ANNOTATION_TOOLS.find(
+          (info) => info.key === e.key.toLowerCase(),
+        );
+        if (picked) {
+          e.preventDefault();
+          editorStore.getState().setTool(picked.tool);
         }
       }
     };
@@ -193,9 +259,15 @@ export function Editor() {
   const [init, setInit] = useState<EditorInit | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<InspectorTab>("background");
-  const flushSettings = useSettingsSync();
+  const rasterScale = useRef(2);
+  const [pxPerPt] = useState(() => () => rasterScale.current);
+  const uploader = useRasterUploader(pxPerPt);
+  const flushSettings = useSettingsSync(uploader);
+  const layer = useRef<AnnotationLayerHandle>(null);
   const durationMs = useEditor((s) => s.durationMs);
   const selected = useEditor((s) => s.selected);
+  const selectedAnnotation = useEditor((s) => s.selectedAnnotation);
+  const drawing = useEditor((s) => s.tool !== "select");
   useShortcuts(durationMs);
 
   useEffect(() => {
@@ -213,13 +285,21 @@ export function Editor() {
           complete(data.autoSegments),
         );
       playbackStore.setState({ timeMs: complete(data.settings).trim.startMs });
+      const { width, bounds } = data.project.recording;
+      // Twice the recording's own pixels, so annotations stay sharp when zoomed in.
+      rasterScale.current = (2 * width) / Math.max(bounds.width ?? 0, 1);
+      uploader.upload(data.missingRasters);
       setInit(data);
     });
-  }, []);
+  }, [uploader]);
 
   useEffect(() => {
     if (selected !== null) setTab("zoom");
   }, [selected]);
+
+  useEffect(() => {
+    if (selectedAnnotation !== null || drawing) setTab("annotations");
+  }, [selectedAnnotation, drawing]);
 
   if (error) {
     return (
@@ -246,7 +326,10 @@ export function Editor() {
             {init.project.name}
           </h1>
           <HistoryButtons />
-          <div className="ml-auto">
+          <div className="mx-auto">
+            <AnnotationToolbar />
+          </div>
+          <div>
             <ExportDialog
               bundlePath={init.bundlePath}
               suggestedPath={init.exportPath}
@@ -257,7 +340,18 @@ export function Editor() {
         <div className="flex min-h-0 flex-1">
           <main className="flex min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 bg-black/40 p-6">
-              <Preview url={init.previewUrl} />
+              <Preview
+                url={init.previewUrl}
+                onFrame={(frame) => layer.current?.frameShown(frame)}
+              >
+                <AnnotationLayer
+                  ref={layer}
+                  screen={{
+                    width: init.project.recording.bounds.width ?? 1,
+                    height: init.project.recording.bounds.height ?? 1,
+                  }}
+                />
+              </Preview>
             </div>
             <PlayerBar durationMs={durationMs} />
           </main>
@@ -265,7 +359,7 @@ export function Editor() {
             <Inspector project={init.project} tab={tab} onTabChange={setTab} />
           </aside>
         </div>
-        <div className="h-52 shrink-0 border-t">
+        <div className="h-64 shrink-0 border-t">
           <Timeline clicks={init.clicks} />
         </div>
       </div>

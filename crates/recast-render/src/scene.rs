@@ -1,14 +1,21 @@
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
-use recast_project::{BackgroundFill, Bundle, EditSettings, EventLog, Project, Rect, Resolution};
+use recast_project::{
+    Annotation, Annotations, BackgroundFill, Bundle, EditSettings, EventLog, Project, Rect,
+    Resolution,
+};
 use recast_zoom::Timeline;
 
 use crate::{
     Result,
+    annotations::{self, Rasters},
     bitmap::Rgba,
     cursor::{CursorImage, default_arrow},
     layout::output_size,
@@ -32,6 +39,12 @@ pub struct Scene {
     cursors: HashMap<u32, CursorImage>,
     default_cursor: CursorImage,
     pub background: Option<Rgba>,
+    /// Images of the annotations, shared with whoever draws them.
+    pub rasters: Arc<Rasters>,
+    /// An annotation left out of the frame, while the editor draws it itself.
+    pub hidden: Option<String>,
+    /// Look keys of `settings.annotations.items`, in the same order.
+    keys: Vec<Option<String>>,
 }
 
 /// What a scene is built from.
@@ -49,6 +62,7 @@ impl Scene {
     pub fn new(parts: SceneParts<'_>) -> Self {
         let settings = parts.settings.sanitized(parts.duration_ms);
         let timeline = Timeline::new(parts.events, &parts.bounds, &settings, parts.duration_ms);
+        let keys = look_keys(&settings.annotations);
         Self {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             settings,
@@ -61,16 +75,21 @@ impl Scene {
             cursors: parts.cursors,
             default_cursor: default_arrow(4.0),
             background: parts.background,
+            rasters: Arc::default(),
+            hidden: None,
+            keys,
         }
     }
 
-    /// Loads events, cursor images and the background image of a bundle.
-    /// `settings` replaces the bundle's saved edits when given.
+    /// Loads events, cursor images, the background image and the annotation images of
+    /// a bundle. `settings` replaces the bundle's saved edits when given.
     pub fn load(bundle: &Bundle, settings: Option<EditSettings>) -> Result<Self> {
         let project = bundle.load_project()?;
         let events = bundle.load_events()?;
         let settings = settings.unwrap_or_else(|| project.edits.clone());
-        Self::from_project(bundle.path(), &project, &events, settings)
+        let mut scene = Self::from_project(bundle.path(), &project, &events, settings)?;
+        scene.rasters = Arc::new(Rasters::load(&bundle.file(annotations::DIR)));
+        Ok(scene)
     }
 
     pub fn from_project(
@@ -133,7 +152,28 @@ impl Scene {
         if image(&settings) != image(&self.settings) {
             self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         }
+        if settings.annotations != self.settings.annotations {
+            self.keys = look_keys(&settings.annotations);
+        }
         self.settings = settings;
+    }
+
+    /// The annotations shown at `t_ms` in drawing order, with their look keys; the
+    /// hidden one is left out.
+    pub fn annotations_at(&self, t_ms: f64) -> impl Iterator<Item = (&Annotation, Option<&str>)> {
+        self.settings
+            .annotations
+            .items
+            .iter()
+            .zip(&self.keys)
+            .filter(move |(a, _)| a.visible_at(t_ms) && self.hidden.as_deref() != Some(&a.id))
+            .map(|(a, key)| (a, key.as_deref()))
+    }
+
+    /// Ids of the annotations that can't be drawn because their image is missing.
+    pub fn missing_rasters(&self) -> Vec<String> {
+        self.rasters
+            .missing(&self.settings.annotations, self.hidden.as_deref())
     }
 
     pub fn set_background(&mut self, background: Option<Rgba>) {
@@ -169,6 +209,14 @@ impl Scene {
             resolution,
         )
     }
+}
+
+fn look_keys(annotations: &Annotations) -> Vec<Option<String>> {
+    annotations
+        .items
+        .iter()
+        .map(|a| a.shape.look_key())
+        .collect()
 }
 
 /// Resolves a background image path, which may be relative to the bundle.

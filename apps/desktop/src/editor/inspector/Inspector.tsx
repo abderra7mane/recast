@@ -6,6 +6,7 @@ import {
   MousePointer2,
   MousePointerClick,
   Play,
+  Shapes,
   Trash2,
   ZoomIn,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import {
   type SoundPack,
 } from "@/bindings";
 import { Button } from "@/components/ui/button";
+import { AnnotationPanel } from "@/editor/annotations/AnnotationPanel";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -52,12 +54,19 @@ import { useEditor, visibleSegments } from "@/editor/store";
 import { editorStore } from "@/editor/store";
 
 export type InspectorTab =
-  "background" | "cursor" | "zoom" | "clicks" | "audio" | "export";
+  | "background"
+  | "cursor"
+  | "zoom"
+  | "annotations"
+  | "clicks"
+  | "audio"
+  | "export";
 
 const TABS: { id: InspectorTab; label: string; icon: typeof Film }[] = [
   { id: "background", label: "Background", icon: ImageIcon },
   { id: "cursor", label: "Cursor", icon: MousePointer2 },
   { id: "zoom", label: "Zoom", icon: ZoomIn },
+  { id: "annotations", label: "Annotations", icon: Shapes },
   { id: "clicks", label: "Clicks & Sounds", icon: MousePointerClick },
   { id: "audio", label: "Audio", icon: AudioLines },
   { id: "export", label: "Export", icon: Film },
@@ -597,6 +606,9 @@ export function Inspector({
           </TabsContent>
           <TabsContent value="zoom">
             <ZoomTab settings={settings} />
+          </TabsContent>
+          <TabsContent value="annotations">
+            <AnnotationPanel />
           </TabsContent>
           <TabsContent value="clicks">
             <ClicksTab settings={settings} />

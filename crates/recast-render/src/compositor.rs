@@ -1,4 +1,8 @@
-use std::{collections::HashMap, num::NonZeroU64, sync::mpsc};
+use std::{
+    collections::HashMap,
+    num::NonZeroU64,
+    sync::{Arc, mpsc},
+};
 
 use bytemuck::{Pod, Zeroable};
 use recast_project::BackgroundFill;
@@ -6,12 +10,24 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     CpuFrame, Error, FrameSource, PixelFormat, Result,
+    annotations::{CellGrid, Raster, pack},
     bitmap::Rgba,
     layout::{Layout, layout},
     scene::Scene,
 };
 
 const MAX_RIPPLES: usize = 16;
+/// Blurred and pixelated areas drawn in one frame; `obscure.wgsl` has the same limit.
+const MAX_AREAS: usize = 64;
+/// Width of the atlas holding the cells of blurred and pixelated areas.
+const ATLAS_WIDTH: u32 = 2_048;
+const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// Annotation images drawn in one frame.
+const MAX_ANNOTATIONS: usize = 256;
+/// Annotation images unused for this many frames leave the GPU.
+const RASTER_IDLE_FRAMES: u64 = 600;
+/// Bytes of annotation images kept on the GPU that the last frame didn't draw.
+const SPARE_GPU_BYTES: usize = 256 << 20;
 /// How much a pressed cursor shrinks.
 const SQUISH: f64 = 0.18;
 /// Ripple ring thickness in screen points.
@@ -37,6 +53,53 @@ struct CompositeParams {
 struct CursorParams {
     rect: [f32; 4],
     canvas: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct AnnotationParams {
+    rect: [f32; 4],
+    canvas: [f32; 4],
+    content: [f32; 4],
+    view: [f32; 4],
+    source: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Area {
+    rect: [f32; 4],
+    grid: [f32; 4],
+    info: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Areas {
+    count: [f32; 4],
+    items: [Area; MAX_AREAS],
+}
+
+/// Cell averages of blurred and pixelated areas, and their smoothed copy.
+struct Atlas {
+    height: u32,
+    cells: wgpu::TextureView,
+    smooth: wgpu::TextureView,
+    smooth_bind: wgpu::BindGroup,
+}
+
+struct PlacedArea {
+    grid: CellGrid,
+    corner: (u32, u32),
+    /// Its place among the annotations shown, in drawing order.
+    order: usize,
+}
+
+struct GpuRaster {
+    raster: Arc<Raster>,
+    bind: wgpu::BindGroup,
+    used: u64,
+    bytes: usize,
 }
 
 struct ScreenTexture {
@@ -74,6 +137,21 @@ pub struct Compositor {
     sampler: wgpu::Sampler,
     screen: Option<ScreenTexture>,
     scene: Option<SceneTextures>,
+    areas: wgpu::Buffer,
+    obscure_layout: wgpu::BindGroupLayout,
+    cells_pipeline: wgpu::RenderPipeline,
+    smooth_pipeline: wgpu::RenderPipeline,
+    atlas: Atlas,
+    annotation_pipeline: wgpu::RenderPipeline,
+    annotation_layout: wgpu::BindGroupLayout,
+    annotation_params: wgpu::Buffer,
+    annotation_stride: u64,
+    rasters: HashMap<String, GpuRaster>,
+    /// The image each annotation was last drawn with, by annotation id: a changed
+    /// annotation keeps it until its new image arrives.
+    shown: HashMap<String, (String, Arc<Raster>)>,
+    frames: u64,
+    missing: usize,
 }
 
 fn texture_format(format: PixelFormat) -> wgpu::TextureFormat {
@@ -109,6 +187,18 @@ fn uniform_entry(binding: u32, size: usize) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
+/// A uniform bound at a different offset for each draw.
+fn dynamic_uniform_entry(binding: u32, size: usize) -> wgpu::BindGroupLayoutEntry {
+    let mut entry = uniform_entry(binding, size);
+    if let wgpu::BindingType::Buffer {
+        has_dynamic_offset, ..
+    } = &mut entry.ty
+    {
+        *has_dynamic_offset = true;
+    }
+    entry
+}
+
 fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -118,14 +208,26 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn pipeline(
-    device: &wgpu::Device,
-    label: &str,
-    source: &str,
-    layout: &wgpu::BindGroupLayout,
+struct PipelineSpec<'a> {
+    label: &'a str,
+    source: &'a str,
+    fragment: &'a str,
     format: wgpu::TextureFormat,
     blend: Option<wgpu::BlendState>,
     topology: wgpu::PrimitiveTopology,
+}
+
+fn pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    PipelineSpec {
+        label,
+        source,
+        fragment,
+        format,
+        blend,
+        topology,
+    }: PipelineSpec<'_>,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -153,7 +255,7 @@ fn pipeline(
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: &module,
-            entry_point: Some("fs"),
+            entry_point: Some(fragment),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
@@ -206,6 +308,70 @@ fn size_resources(
     Ok((target, readback, padded_row))
 }
 
+fn create_atlas(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    areas: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    height: u32,
+) -> Atlas {
+    let texture = |label| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: ATLAS_WIDTH,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: ATLAS_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default())
+    };
+    let cells = texture("cells");
+    let smooth = texture("smoothed cells");
+    let smooth_bind = obscure_bind(device, layout, areas, sampler, &cells);
+    Atlas {
+        height,
+        cells,
+        smooth,
+        smooth_bind,
+    }
+}
+
+fn obscure_bind(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    areas: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    source: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("obscure"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: areas.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
 impl Compositor {
     /// A compositor drawing `width × height` frames in `format`, without a window.
     pub fn new(width: u32, height: u32, format: PixelFormat) -> Result<Self> {
@@ -232,6 +398,9 @@ impl Compositor {
                 texture_entry(1),
                 texture_entry(2),
                 sampler_entry(3),
+                uniform_entry(4, size_of::<Areas>()),
+                texture_entry(5),
+                texture_entry(6),
             ],
         });
         let cursor_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -242,36 +411,83 @@ impl Compositor {
                 sampler_entry(2),
             ],
         });
+        let annotation_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("annotation"),
+            entries: &[
+                dynamic_uniform_entry(0, size_of::<AnnotationParams>()),
+                texture_entry(1),
+                sampler_entry(2),
+                uniform_entry(3, size_of::<Areas>()),
+            ],
+        });
+        let obscure_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("obscure"),
+            entries: &[
+                uniform_entry(0, size_of::<Areas>()),
+                texture_entry(1),
+                sampler_entry(2),
+            ],
+        });
         let composite_pipeline = pipeline(
             &device,
-            "composite",
-            include_str!("shaders/composite.wgsl"),
             &composite_layout,
-            target_format,
-            None,
-            wgpu::PrimitiveTopology::TriangleList,
+            PipelineSpec {
+                label: "composite",
+                source: include_str!("shaders/composite.wgsl"),
+                fragment: "fs",
+                format: target_format,
+                blend: None,
+                topology: wgpu::PrimitiveTopology::TriangleList,
+            },
         );
-        let cursor_pipeline = pipeline(
+        let image_spec = |label| PipelineSpec {
+            label,
+            source: include_str!("shaders/cursor.wgsl"),
+            fragment: "fs",
+            format: target_format,
+            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+        };
+        let cursor_pipeline = pipeline(&device, &cursor_layout, image_spec("cursor"));
+        let annotation_pipeline = pipeline(
             &device,
-            "cursor",
-            include_str!("shaders/cursor.wgsl"),
-            &cursor_layout,
-            target_format,
-            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            wgpu::PrimitiveTopology::TriangleStrip,
+            &annotation_layout,
+            PipelineSpec {
+                source: include_str!("shaders/annotation.wgsl"),
+                ..image_spec("annotation")
+            },
         );
-        let composite_params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("composite params"),
-            size: size_of::<CompositeParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let cursor_params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cursor params"),
-            size: size_of::<CursorParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let obscure_spec = |label, fragment| PipelineSpec {
+            label,
+            source: include_str!("shaders/obscure.wgsl"),
+            fragment,
+            format: ATLAS_FORMAT,
+            blend: None,
+            topology: wgpu::PrimitiveTopology::TriangleList,
+        };
+        let cells_pipeline = pipeline(&device, &obscure_layout, obscure_spec("cells", "fs_cells"));
+        let smooth_pipeline = pipeline(
+            &device,
+            &obscure_layout,
+            obscure_spec("smooth", "fs_smooth"),
+        );
+        let uniform = |label, size: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let composite_params = uniform("composite params", size_of::<CompositeParams>() as u64);
+        let cursor_params = uniform("cursor params", size_of::<CursorParams>() as u64);
+        let areas = uniform("areas", size_of::<Areas>() as u64);
+        let annotation_stride = (size_of::<AnnotationParams>() as u64)
+            .next_multiple_of(device.limits().min_uniform_buffer_offset_alignment as u64);
+        let annotation_params = uniform(
+            "annotation params",
+            annotation_stride * MAX_ANNOTATIONS as u64,
+        );
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -281,6 +497,7 @@ impl Compositor {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        let atlas = create_atlas(&device, &obscure_layout, &areas, &sampler, 64);
 
         let (target, readback, padded_row) = size_resources(&device, target_format, width, height)?;
         Ok(Self {
@@ -302,6 +519,19 @@ impl Compositor {
             sampler,
             screen: None,
             scene: None,
+            areas,
+            obscure_layout,
+            cells_pipeline,
+            smooth_pipeline,
+            atlas,
+            annotation_pipeline,
+            annotation_layout,
+            annotation_params,
+            annotation_stride,
+            rasters: HashMap::new(),
+            shown: HashMap::new(),
+            frames: 0,
+            missing: 0,
         })
     }
 
@@ -555,10 +785,223 @@ impl Compositor {
                         binding: 3,
                         resource: wgpu::BindingResource::Sampler(&self.sampler),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.areas.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&self.atlas.cells),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(&self.atlas.smooth),
+                    },
                 ],
             }));
         }
         self.composite_bind.as_ref().expect("bind group")
+    }
+
+    /// Lays out the cells of the blurred and pixelated areas shown at `t_ms` in the
+    /// atlas, growing it when needed, and writes their parameters.
+    fn prepare_areas(&mut self, scene: &Scene, t_ms: f64) -> Result<Vec<PlacedArea>> {
+        let screen = self.screen.as_ref().expect("frame uploaded");
+        let texture = (screen.width, screen.height);
+        let (mut order, mut grids): (Vec<usize>, Vec<CellGrid>) = scene
+            .annotations_at(t_ms)
+            .enumerate()
+            .filter_map(|(i, (a, _))| {
+                CellGrid::new(&a.shape, (scene.screen_width, scene.screen_height), texture)
+                    .map(|grid| (i, grid))
+            })
+            .unzip();
+        if grids.len() > MAX_AREAS {
+            log::warn!(
+                "{} blurred or pixelated areas at {t_ms} ms; only {MAX_AREAS} are drawn",
+                grids.len()
+            );
+            order.drain(..grids.len() - MAX_AREAS);
+            grids.drain(..grids.len() - MAX_AREAS);
+        }
+        let sizes: Vec<_> = grids.iter().map(|g| (g.columns, g.rows)).collect();
+        let (corners, height) = pack(&sizes, ATLAS_WIDTH);
+        if height > self.atlas.height {
+            let height = height.next_power_of_two();
+            if height > self.device.limits().max_texture_dimension_2d {
+                return Err(Error::Gpu(
+                    "the blurred and pixelated areas don't fit on the GPU".into(),
+                ));
+            }
+            self.atlas = create_atlas(
+                &self.device,
+                &self.obscure_layout,
+                &self.areas,
+                &self.sampler,
+                height,
+            );
+            self.composite_bind = None;
+        }
+        let mut areas = Areas::zeroed();
+        areas.count[0] = grids.len() as f32;
+        for (area, (grid, corner)) in areas.items.iter_mut().zip(grids.iter().zip(&corners)) {
+            *area = Area {
+                rect: [grid.x, grid.y, grid.width, grid.height].map(|v| v as f32),
+                grid: [corner.0, corner.1, grid.columns, grid.rows].map(|v| v as f32),
+                info: [
+                    grid.block as f32,
+                    if grid.pixelate { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ],
+            };
+        }
+        self.queue
+            .write_buffer(&self.areas, 0, bytemuck::bytes_of(&areas));
+        Ok(grids
+            .into_iter()
+            .zip(corners)
+            .zip(order)
+            .map(|((grid, corner), order)| PlacedArea {
+                grid,
+                corner,
+                order,
+            })
+            .collect())
+    }
+
+    /// Averages the cells of `grids` and smooths the blurred ones.
+    fn encode_areas(&self, encoder: &mut wgpu::CommandEncoder, grids: &[PlacedArea]) {
+        if grids.is_empty() {
+            return;
+        }
+        let screen = self
+            .screen
+            .as_ref()
+            .expect("frame uploaded")
+            .texture
+            .create_view(&Default::default());
+        let cells_bind = obscure_bind(
+            &self.device,
+            &self.obscure_layout,
+            &self.areas,
+            &self.sampler,
+            &screen,
+        );
+        let passes = [
+            (&self.atlas.cells, &self.cells_pipeline, &cells_bind, true),
+            (
+                &self.atlas.smooth,
+                &self.smooth_pipeline,
+                &self.atlas.smooth_bind,
+                false,
+            ),
+        ];
+        for (target, pipeline, bind, all) in passes {
+            if !all && grids.iter().all(|a| a.grid.pixelate) {
+                continue;
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cells"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, bind, &[]);
+            for (i, area) in grids.iter().enumerate() {
+                let (grid, (x, y)) = (&area.grid, area.corner);
+                if all || !grid.pixelate {
+                    pass.set_scissor_rect(x, y, grid.columns, grid.rows);
+                    pass.draw(0..3, i as u32..i as u32 + 1);
+                }
+            }
+        }
+    }
+
+    /// The bind group of an annotation image, uploading it when it is new.
+    fn raster_bind(&mut self, key: &str, raster: Arc<Raster>) -> wgpu::BindGroup {
+        let frames = self.frames;
+        if let Some(gpu) = self.rasters.get_mut(key)
+            && Arc::ptr_eq(&gpu.raster, &raster)
+        {
+            gpu.used = frames;
+            return gpu.bind.clone();
+        }
+        let image = Rgba::from_straight(raster.width, raster.height, raster.rgba.clone());
+        let view = self
+            .upload_mips("annotation", &image)
+            .create_view(&Default::default());
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("annotation"),
+            layout: &self.annotation_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.annotation_params,
+                        offset: 0,
+                        size: NonZeroU64::new(size_of::<AnnotationParams>() as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.areas.as_entire_binding(),
+                },
+            ],
+        });
+        // The image and its smaller copies.
+        let bytes = raster.rgba.len() * 4 / 3;
+        self.rasters.insert(
+            key.to_string(),
+            GpuRaster {
+                raster,
+                bind: bind.clone(),
+                used: frames,
+                bytes,
+            },
+        );
+        bind
+    }
+
+    /// Frees annotation images the last frame didn't draw: the ones unused for long, and
+    /// the least recently used beyond [`SPARE_GPU_BYTES`].
+    fn evict_rasters(&mut self) {
+        let frames = self.frames;
+        let mut spare: Vec<(u64, usize, String)> = self
+            .rasters
+            .iter()
+            .filter(|(_, gpu)| gpu.used != frames)
+            .map(|(key, gpu)| (gpu.used, gpu.bytes, key.clone()))
+            .collect();
+        spare.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+        let mut kept = 0;
+        for (used, bytes, key) in spare {
+            kept += bytes;
+            if kept > SPARE_GPU_BYTES || used + RASTER_IDLE_FRAMES < frames {
+                self.rasters.remove(&key);
+            }
+        }
+    }
+
+    /// How many annotations the last frame couldn't draw with their current image.
+    pub fn missing_rasters(&self) -> usize {
+        self.missing
     }
 
     pub fn layout(&self, scene: &Scene) -> Layout {
@@ -586,6 +1029,7 @@ impl Compositor {
     pub fn render(&mut self, scene: &Scene, frame: &CpuFrame<'_>, t_ms: f64) -> Result<()> {
         self.prepare_scene(scene);
         self.upload_frame(frame)?;
+        let areas = self.prepare_areas(scene, t_ms)?;
         let layout = self.layout(scene);
         let settings = &scene.settings;
         let camera = scene.timeline.camera(t_ms);
@@ -697,12 +1141,80 @@ impl Compositor {
             id
         });
 
+        self.frames += 1;
+        self.missing = 0;
+        let screen = self.screen.as_ref().expect("screen texture");
+        let source = [screen.width as f32, screen.height as f32, 0.0, 0.0];
+        let mut annotations = Vec::new();
+        let mut annotation_params = Vec::new();
+        for (order, (annotation, key)) in scene.annotations_at(t_ms).enumerate() {
+            let Some(key) = key else { continue };
+            let (key, raster) = match scene.rasters.get(key) {
+                Some(raster) => {
+                    self.shown
+                        .insert(annotation.id.clone(), (key.to_string(), raster.clone()));
+                    (key.to_string(), raster)
+                }
+                None => {
+                    self.missing += 1;
+                    match self.shown.get(&annotation.id) {
+                        Some((key, raster)) => (key.clone(), raster.clone()),
+                        None => continue,
+                    }
+                }
+            };
+            if annotations.len() == MAX_ANNOTATIONS {
+                log::warn!("more than {MAX_ANNOTATIONS} annotations at {t_ms} ms");
+                break;
+            }
+            let anchor = annotation.shape.anchor();
+            let (x, y) = to_pixels(recast_zoom::Point::new(
+                (anchor.x + raster.x) / scene.screen_width.max(1e-9),
+                (anchor.y + raster.y) / scene.screen_height.max(1e-9),
+            ));
+            let first_area = areas.partition_point(|a| a.order < order);
+            let params = AnnotationParams {
+                rect: [
+                    x as f32,
+                    y as f32,
+                    (raster.width_pts * zoomed_px_per_pt) as f32,
+                    (raster.height_pts * zoomed_px_per_pt) as f32,
+                ],
+                canvas: [
+                    self.width as f32,
+                    self.height as f32,
+                    1.0,
+                    first_area as f32,
+                ],
+                content: [content.x, content.y, content.width, content.height].map(|v| v as f32),
+                view: [vx, vy, vw, vh].map(|v| v as f32),
+                source,
+            };
+            let offset = annotation_params.len();
+            annotation_params.extend_from_slice(bytemuck::bytes_of(&params));
+            annotation_params.resize(offset + self.annotation_stride as usize, 0);
+            annotations.push((self.raster_bind(&key, raster), offset as u32));
+        }
+        if !annotation_params.is_empty() {
+            self.queue
+                .write_buffer(&self.annotation_params, 0, &annotation_params);
+        }
+        // An annotation the editor draws itself while it changes must not come back with
+        // its old image when it lands.
+        if let Some(hidden) = &scene.hidden {
+            self.shown.remove(hidden);
+        }
+        self.shown
+            .retain(|id, _| scene.settings.annotations.items.iter().any(|a| &a.id == id));
+        self.evict_rasters();
+
         let target = self.target.create_view(&Default::default());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("frame"),
             });
+        self.encode_areas(&mut encoder, &areas);
         {
             let composite_bind = self.composite_bind().clone();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -722,13 +1234,23 @@ impl Compositor {
             pass.set_bind_group(0, &composite_bind, &[]);
             pass.draw(0..3, 0..1);
 
-            if let Some(id) = cursor_draw {
-                let clip = clip_rect(&layout, self.width, self.height);
+            let clip = clip_rect(&layout, self.width, self.height);
+            if let Some(id) = cursor_draw
+                && let Some((x, y, w, h)) = clip
+            {
                 let bind = &self.scene.as_ref().expect("scene prepared").cursors[&id];
-                if let Some((x, y, w, h)) = clip {
-                    pass.set_scissor_rect(x, y, w, h);
-                    pass.set_pipeline(&self.cursor_pipeline);
-                    pass.set_bind_group(0, bind, &[]);
+                pass.set_scissor_rect(x, y, w, h);
+                pass.set_pipeline(&self.cursor_pipeline);
+                pass.set_bind_group(0, bind, &[]);
+                pass.draw(0..4, 0..1);
+            }
+            if !annotations.is_empty()
+                && let Some((x, y, w, h)) = clip
+            {
+                pass.set_scissor_rect(x, y, w, h);
+                pass.set_pipeline(&self.annotation_pipeline);
+                for (bind, offset) in &annotations {
+                    pass.set_bind_group(0, bind, &[*offset]);
                     pass.draw(0..4, 0..1);
                 }
             }

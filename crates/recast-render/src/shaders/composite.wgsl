@@ -19,10 +19,26 @@ struct Params {
     ripples: array<vec4f, 16>,
 }
 
+// Blurred and pixelated areas, as in `obscure.wgsl`.
+struct Area {
+    rect: vec4f,
+    grid: vec4f,
+    info: vec4f,
+}
+
+struct Areas {
+    count: vec4f,
+    items: array<Area, 64>,
+}
+
 @group(0) @binding(0) var<uniform> u: Params;
 @group(0) @binding(1) var screen_tex: texture_2d<f32>;
 @group(0) @binding(2) var bg_tex: texture_2d<f32>;
 @group(0) @binding(3) var linear_sampler: sampler;
+@group(0) @binding(4) var<uniform> areas: Areas;
+// Cell averages, and the smoothed cells of blurred areas.
+@group(0) @binding(5) var cells_tex: texture_2d<f32>;
+@group(0) @binding(6) var smooth_tex: texture_2d<f32>;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -114,10 +130,45 @@ fn sample_screen(uv: vec2f) -> vec4f {
         }
         color = sum / (taps * taps);
     }
-    if u.source.w < 0.5 {
-        color.a = 1.0;
-    }
     return color;
+}
+
+// The color blur or pixelate puts at `uv` instead of the screen's; areas listed later
+// cover earlier ones.
+fn obscure(uv: vec2f, color: vec4f) -> vec4f {
+    let p = uv * u.source.xy;
+    var out = color;
+    for (var i = 0u; i < u32(areas.count.x); i++) {
+        let area = areas.items[i];
+        let local = p - area.rect.xy;
+        if any(local < vec2f(0.0)) || any(local >= area.rect.zw) {
+            continue;
+        }
+        let origin = vec2i(area.grid.xy);
+        let last = vec2i(area.grid.zw) - 1;
+        let block = area.info.x;
+        if area.info.y > 0.5 {
+            out = textureLoad(cells_tex, origin + min(vec2i(floor(local / block)), last), 0);
+        } else {
+            // Bilinear between cell centers, held at the outer ones.
+            let g = clamp(local / block - 0.5, vec2f(0.0), area.grid.zw - 1.0);
+            let i0 = vec2i(floor(g));
+            let i1 = min(i0 + 1, last);
+            let t = g - floor(g);
+            let top = mix(
+                textureLoad(smooth_tex, origin + i0, 0),
+                textureLoad(smooth_tex, origin + vec2i(i1.x, i0.y), 0),
+                t.x,
+            );
+            let bottom = mix(
+                textureLoad(smooth_tex, origin + vec2i(i0.x, i1.y), 0),
+                textureLoad(smooth_tex, origin + i1, 0),
+                t.x,
+            );
+            out = mix(top, bottom, t.y);
+        }
+    }
+    return out;
 }
 
 @fragment
@@ -140,7 +191,11 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
     let coverage = clamp(0.5 - distance, 0.0, 1.0);
     if coverage > 0.0 {
         let local = (p - content_min) / size;
-        let sampled = sample_screen(u.view.xy + local * u.view.zw);
+        let uv = u.view.xy + local * u.view.zw;
+        var sampled = obscure(uv, sample_screen(uv));
+        if u.source.w < 0.5 {
+            sampled.a = 1.0;
+        }
         var screen = sampled.rgb;
         let half_ring = u.source.z * 0.5;
         for (var i = 0u; i < u32(u.shadow.w); i++) {

@@ -1,23 +1,28 @@
-//! Preview frames sent over the WebSocket: a 32-byte little-endian header followed
+//! Preview frames sent over the WebSocket: a 72-byte little-endian header followed
 //! by the NV12 planes (Y, then interleaved UV at half size).
 //!
-//! | bytes  | field                         |
-//! |--------|-------------------------------|
-//! | 0..4   | magic `RCF1`                  |
-//! | 4..8   | width (u32)                   |
-//! | 8..12  | height (u32)                  |
-//! | 12..16 | flags (u32, bit 0: playing)   |
-//! | 16..24 | sequence (u64)                |
-//! | 24..32 | frame time in ms (f64)        |
+//! | bytes  | field                                                  |
+//! |--------|--------------------------------------------------------|
+//! | 0..4   | magic `RCF2`                                           |
+//! | 4..8   | width (u32)                                            |
+//! | 8..12  | height (u32)                                           |
+//! | 12..16 | flags (u32, bit 0: playing, bit 1: annotations drawn)  |
+//! | 16..24 | sequence (u64)                                         |
+//! | 24..32 | frame time in ms (f64)                                 |
+//! | 32..36 | sequence of the edits shown (u32)                      |
+//! | 36..40 | reserved                                               |
+//! | 40..56 | the recording in the frame: x, y, width, height (f32)  |
+//! | 56..72 | the part of the recording shown: x, y, width, height, 0..1 (f32) |
 
 use std::{
     sync::{Condvar, Mutex},
     time::Duration,
 };
 
-pub const MAGIC: [u8; 4] = *b"RCF1";
-pub const HEADER_LEN: usize = 32;
+pub const MAGIC: [u8; 4] = *b"RCF2";
+pub const HEADER_LEN: usize = 72;
 const PLAYING: u32 = 1;
+const COMPLETE: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameHeader {
@@ -28,6 +33,14 @@ pub struct FrameHeader {
     pub seq: u64,
     /// Time on the recording's timeline.
     pub t_ms: f64,
+    /// The `seq` of the newest edits the frame shows.
+    pub edits: u32,
+    /// Whether every annotation shown had its image.
+    pub complete: bool,
+    /// Where the recording's screen is in the frame, in pixels.
+    pub content: [f32; 4],
+    /// The part of the screen shown, normalized; zoom shows less than all of it.
+    pub view: [f32; 4],
 }
 
 impl FrameHeader {
@@ -36,10 +49,15 @@ impl FrameHeader {
         out[0..4].copy_from_slice(&MAGIC);
         out[4..8].copy_from_slice(&self.width.to_le_bytes());
         out[8..12].copy_from_slice(&self.height.to_le_bytes());
-        let flags = if self.playing { PLAYING } else { 0 };
+        let flags =
+            (if self.playing { PLAYING } else { 0 }) | (if self.complete { COMPLETE } else { 0 });
         out[12..16].copy_from_slice(&flags.to_le_bytes());
         out[16..24].copy_from_slice(&self.seq.to_le_bytes());
         out[24..32].copy_from_slice(&self.t_ms.to_le_bytes());
+        out[32..36].copy_from_slice(&self.edits.to_le_bytes());
+        for (i, v) in self.content.iter().chain(&self.view).enumerate() {
+            out[40 + i * 4..44 + i * 4].copy_from_slice(&v.to_le_bytes());
+        }
         out
     }
 
@@ -49,12 +67,17 @@ impl FrameHeader {
             return None;
         }
         let u32_at = |i: usize| u32::from_le_bytes(header[i..i + 4].try_into().expect("4 bytes"));
+        let f32_at = |i: usize| f32::from_le_bytes(header[i..i + 4].try_into().expect("4 bytes"));
         Some(Self {
             width: u32_at(4),
             height: u32_at(8),
             playing: u32_at(12) & PLAYING != 0,
             seq: u64::from_le_bytes(header[16..24].try_into().expect("8 bytes")),
             t_ms: f64::from_le_bytes(header[24..32].try_into().expect("8 bytes")),
+            edits: u32_at(32),
+            complete: u32_at(12) & COMPLETE != 0,
+            content: [40, 44, 48, 52].map(f32_at),
+            view: [56, 60, 64, 68].map(f32_at),
         })
     }
 
@@ -134,40 +157,44 @@ mod tests {
 
     use super::*;
 
+    const HEADER: FrameHeader = FrameHeader {
+        width: 1280,
+        height: 800,
+        playing: true,
+        seq: 42,
+        t_ms: 1234.5,
+        edits: 7,
+        complete: true,
+        content: [10.0, 20.0, 1260.0, 760.0],
+        view: [0.25, 0.25, 0.5, 0.5],
+    };
+
     #[test]
     fn header_round_trip() {
-        let header = FrameHeader {
-            width: 1280,
-            height: 800,
-            playing: true,
-            seq: 42,
-            t_ms: 1234.5,
-        };
+        let header = HEADER;
         let bytes = header.encode();
-        assert_eq!(&bytes[0..4], b"RCF1");
+        assert_eq!(&bytes[0..4], b"RCF2");
         assert_eq!(&bytes[4..8], &1280u32.to_le_bytes());
-        assert_eq!(&bytes[12..16], &1u32.to_le_bytes());
+        assert_eq!(&bytes[12..16], &3u32.to_le_bytes());
+        assert_eq!(&bytes[32..36], &7u32.to_le_bytes());
+        assert_eq!(&bytes[40..44], &10f32.to_le_bytes());
+        assert_eq!(&bytes[68..72], &0.5f32.to_le_bytes());
         assert_eq!(FrameHeader::decode(&bytes), Some(header));
-        assert_eq!(header.message_len(), 32 + 1280 * 800 * 3 / 2);
+        assert_eq!(header.message_len(), 72 + 1280 * 800 * 3 / 2);
 
         let paused = FrameHeader {
             playing: false,
+            complete: false,
             ..header
         };
+        assert_eq!(&paused.encode()[12..16], &0u32.to_le_bytes());
         assert_eq!(FrameHeader::decode(&paused.encode()), Some(paused));
     }
 
     #[test]
     fn header_rejects_bad_input() {
-        assert_eq!(FrameHeader::decode(&[0; 31]), None);
-        let mut bytes = FrameHeader {
-            width: 2,
-            height: 2,
-            playing: false,
-            seq: 0,
-            t_ms: 0.0,
-        }
-        .encode();
+        assert_eq!(FrameHeader::decode(&[0; 71]), None);
+        let mut bytes = HEADER.encode();
         bytes[0] = b'X';
         assert_eq!(FrameHeader::decode(&bytes), None);
     }

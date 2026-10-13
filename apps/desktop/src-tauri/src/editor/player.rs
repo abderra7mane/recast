@@ -12,7 +12,8 @@ use std::{
 use recast_export::decode::VideoDecoder;
 use recast_project::{BackgroundFill, EditSettings, EventLog, Project, Resolution};
 use recast_render::{
-    Compositor, CpuFrame, FrameSource, PixelFormat, Scene, bitmap::Rgba, nv12, resolve,
+    Compositor, CpuFrame, FrameSource, PixelFormat, Scene, annotations::Rasters, bitmap::Rgba,
+    nv12, resolve,
 };
 
 use super::{
@@ -34,7 +35,14 @@ pub enum Command {
     Seek(f64),
     Loop(bool),
     Resize(u32, u32),
-    Settings(Box<EditSettings>),
+    /// New edits, numbered by `seq`; `hidden` names an annotation to leave out.
+    Settings {
+        settings: Box<EditSettings>,
+        hidden: Option<String>,
+        seq: u32,
+    },
+    /// Draws the frame again, for an annotation image that arrived.
+    Redraw,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -74,6 +82,7 @@ pub struct PlayerInit {
     pub events: Arc<EventLog>,
     pub settings: EditSettings,
     pub server: Arc<PreviewServer>,
+    pub rasters: Arc<Rasters>,
 }
 
 impl Player {
@@ -245,6 +254,7 @@ struct State {
     looping: bool,
     position_ms: f64,
     seq: u64,
+    edits: u32,
     stats: PlayerStats,
     render_total_ms: f64,
 }
@@ -257,13 +267,15 @@ impl State {
             events,
             settings,
             server,
+            rasters,
         } = init;
         let mut base = settings.clone();
         base.background.fill = BackgroundFill::Solid {
             color: recast_project::Color::rgb(0, 0, 0),
         };
-        let scene =
+        let mut scene =
             Scene::from_project(&bundle_dir, &project, &events, base).map_err(|e| e.to_string())?;
+        scene.rasters = rasters;
         let compositor = Compositor::new(2, 2, PixelFormat::Rgba8).map_err(|e| e.to_string())?;
         let duration_ms = project.recording.duration_ms;
         let audio = AudioPlayer::start(
@@ -289,6 +301,7 @@ impl State {
             looping: false,
             position_ms: 0.0,
             seq: 0,
+            edits: 0,
             stats: PlayerStats::default(),
             render_total_ms: 0.0,
             scene,
@@ -358,11 +371,18 @@ impl State {
                         self.area = (w, h);
                         render = true;
                     }
-                    Command::Settings(s) => settings = Some(*s),
+                    Command::Settings {
+                        settings: s,
+                        hidden,
+                        seq,
+                    } => settings = Some((*s, hidden, seq)),
+                    Command::Redraw => render = true,
                 }
             }
-            if let Some(settings) = settings {
+            if let Some((settings, hidden, seq)) = settings {
                 self.apply_settings(settings);
+                self.scene.hidden = hidden;
+                self.edits = seq;
                 render = true;
             }
             if let Some(t) = seek {
@@ -459,12 +479,18 @@ impl State {
             .render_from(&self.scene, &mut self.video, t_ms)
             .map_err(|e| e.to_string())?;
         self.seq += 1;
+        let content = self.compositor.layout(&self.scene).content;
+        let (vx, vy, vw, vh) = self.scene.timeline.camera(t_ms).view();
         let header = FrameHeader {
             width,
             height,
             playing: self.playing,
             seq: self.seq,
             t_ms,
+            edits: self.edits,
+            complete: self.compositor.missing_rasters() == 0,
+            content: [content.x, content.y, content.width, content.height].map(|v| v as f32),
+            view: [vx, vy, vw, vh].map(|v| v as f32),
         };
         let mut message = vec![0u8; header.message_len()];
         message[..HEADER_LEN].copy_from_slice(&header.encode());

@@ -4,11 +4,13 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use recast_project::{
-    BackgroundFill, BackgroundSettings, Color, EditSettings, EventKind, EventLog, InputEvent,
-    MouseButton, Rect, Shadow,
+    Annotation, AnnotationShape, Annotations, BackgroundFill, BackgroundSettings, Color,
+    EditSettings, EventKind, EventLog, InputEvent, MouseButton, Rect, Shadow, ZoomFocus,
+    ZoomSegment,
 };
 use recast_render::{
     Compositor, CpuFrame, FrameSource, PixelFormat, Result, Scene, SceneParts,
+    annotations::Raster,
     bitmap::{self, Rgba},
     cursor::CursorImage,
     still::StillRenderer,
@@ -707,4 +709,394 @@ fn auto_resolution_shows_every_video_pixel_once() {
         }
     }
     assert_eq!(resampled, 0);
+}
+
+/// Settings that show the recording 1:1 in a frame of its size, without effects.
+fn plain_settings() -> EditSettings {
+    let mut settings = EditSettings::default();
+    settings.zoom.auto = false;
+    settings.background.padding = 0.0;
+    settings.background.corner_radius = 0.0;
+    settings.background.shadow.opacity = 0.0;
+    settings
+}
+
+fn annotated(mut settings: EditSettings, shapes: Vec<(AnnotationShape, f64, f64)>) -> Scene {
+    settings.annotations = Annotations {
+        tracks: 1,
+        items: shapes
+            .into_iter()
+            .enumerate()
+            .map(|(i, (shape, start_ms, end_ms))| Annotation {
+                id: format!("a{i}"),
+                start_ms,
+                end_ms,
+                track: 0,
+                shape,
+            })
+            .collect(),
+    };
+    Scene::new(SceneParts {
+        bounds: rect(0.0, 0.0, SCREEN_W as f64, SCREEN_H as f64),
+        video_size: (SCREEN_W, SCREEN_H),
+        duration_ms: 6_000.0,
+        events: &EventLog::default(),
+        settings,
+        cursors: HashMap::new(),
+        background: None,
+    })
+}
+
+fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// Renders at the recording's own size, so each output pixel is one screen texel.
+fn render_native(scene: &Scene, t_ms: f64) -> Vec<u8> {
+    let mut compositor = Compositor::new(SCREEN_W, SCREEN_H, PixelFormat::Rgba8).unwrap();
+    compositor.frame(scene, &mut Pattern::new(), t_ms).unwrap()
+}
+
+fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [f64; 3] {
+    let i = ((y * width + x) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2]].map(|v| v as f64)
+}
+
+/// Averages of `block × block` cells of the pattern in `area` (texels), as the screenshot
+/// editor computes them.
+fn cell_averages(area: (u32, u32, u32, u32), block: u32) -> Vec<Vec<[f64; 3]>> {
+    let (x0, y0, w, h) = area;
+    (0..h.div_ceil(block))
+        .map(|row| {
+            (0..w.div_ceil(block))
+                .map(|column| {
+                    let mut sum = [0.0; 3];
+                    let mut n = 0.0;
+                    for y in y0 + row * block..(y0 + (row + 1) * block).min(y0 + h) {
+                        for x in x0 + column * block..(x0 + (column + 1) * block).min(x0 + w) {
+                            let c = Pattern::color(x, y);
+                            for i in 0..3 {
+                                sum[i] += c[i] as f64;
+                            }
+                            n += 1.0;
+                        }
+                    }
+                    sum.map(|v| v / n)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The screenshot editor's smoothing: neighbours weighted 1-2-1 on both axes, twice.
+fn smooth(cells: &[Vec<[f64; 3]>]) -> Vec<Vec<[f64; 3]>> {
+    let (rows, columns) = (cells.len() as i64, cells[0].len() as i64);
+    let pass = |input: &Vec<Vec<[f64; 3]>>, dc: i64, dr: i64| {
+        let at =
+            |r: i64, c: i64| input[r.clamp(0, rows - 1) as usize][c.clamp(0, columns - 1) as usize];
+        (0..rows)
+            .map(|r| {
+                (0..columns)
+                    .map(|c| {
+                        let (a, b, d) = (at(r - dr, c - dc), at(r, c), at(r + dr, c + dc));
+                        [0, 1, 2].map(|i| (a[i] + 2.0 * b[i] + d[i]) / 4.0)
+                    })
+                    .collect()
+            })
+            .collect::<Vec<Vec<[f64; 3]>>>()
+    };
+    let once = |v: &Vec<Vec<[f64; 3]>>| pass(&pass(v, 1, 0), 0, 1);
+    once(&once(&cells.to_vec()))
+}
+
+fn close(a: [f64; 3], b: [f64; 3], tolerance: f64) -> bool {
+    (0..3).all(|i| (a[i] - b[i]).abs() <= tolerance)
+}
+
+#[test]
+fn pixelate_shows_the_cell_averages_of_the_recording() {
+    let shape = AnnotationShape::Pixelate {
+        rect: rect(100.0, 60.0, 100.0, 50.0),
+        block: 12.0,
+    };
+    let scene = annotated(plain_settings(), vec![(shape, 0.0, 6_000.0)]);
+    let pixels = render_native(&scene, 500.0);
+    let cells = cell_averages((100, 60, 100, 50), 12);
+    for y in 60..110 {
+        for x in 100..200 {
+            let expected = cells[((y - 60) / 12) as usize][((x - 100) / 12) as usize];
+            let actual = pixel(&pixels, SCREEN_W, x, y);
+            assert!(
+                close(actual, expected, 1.5),
+                "({x}, {y}): {actual:?} vs {expected:?}"
+            );
+        }
+    }
+    let outside = pixel(&pixels, SCREEN_W, 99, 59);
+    assert!(close(
+        outside,
+        Pattern::color(99, 59).map(|v| v as f64),
+        1.5
+    ));
+}
+
+#[test]
+fn blur_matches_the_screenshot_editor_and_removes_detail() {
+    let area = (80, 70, 150, 90);
+    let shape = AnnotationShape::Blur {
+        rect: rect(80.0, 70.0, 150.0, 90.0),
+        block: 12.0,
+    };
+    let scene = annotated(plain_settings(), vec![(shape, 0.0, 6_000.0)]);
+    let pixels = render_native(&scene, 500.0);
+    let smoothed = smooth(&cell_averages(area, 12));
+    let (rows, columns) = (smoothed.len(), smoothed[0].len());
+    let along = |position: u32, count: usize| {
+        let g = ((position as f64 + 0.5) / 12.0 - 0.5).clamp(0.0, (count - 1) as f64);
+        let i0 = g.floor() as usize;
+        (i0, (i0 + 1).min(count - 1), g - g.floor())
+    };
+    let mut values = Vec::new();
+    for y in 0..area.3 {
+        for x in 0..area.2 {
+            let (c0, c1, tx) = along(x, columns);
+            let (r0, r1, ty) = along(y, rows);
+            let lerp =
+                |a: [f64; 3], b: [f64; 3], t: f64| [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t);
+            let expected = lerp(
+                lerp(smoothed[r0][c0], smoothed[r0][c1], tx),
+                lerp(smoothed[r1][c0], smoothed[r1][c1], tx),
+                ty,
+            );
+            let actual = pixel(&pixels, SCREEN_W, area.0 + x, area.1 + y);
+            assert!(
+                close(actual, expected, 2.0),
+                "({x}, {y}): {actual:?} vs {expected:?}"
+            );
+            values.push(actual[0]);
+        }
+    }
+    let variance = |v: &[f64]| {
+        let mean = v.iter().sum::<f64>() / v.len() as f64;
+        v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64
+    };
+    let original: Vec<f64> = (0..area.3)
+        .flat_map(|y| (0..area.2).map(move |x| Pattern::color(area.0 + x, area.1 + y)[0] as f64))
+        .collect();
+    assert!(variance(&values) < variance(&original) / 10.0);
+}
+
+#[test]
+fn annotations_follow_the_recording_when_zoomed() {
+    let mut settings = plain_settings();
+    settings.zoom.segments = vec![ZoomSegment {
+        start_ms: 0.0,
+        end_ms: 6_000.0,
+        level: 2.0,
+        focus: ZoomFocus::Point { x: 0.5, y: 0.5 },
+    }];
+    let marker = AnnotationShape::Rect {
+        rect: rect(300.0, 200.0, 10.0, 5.0),
+        color: Color::rgb(255, 0, 0),
+        width: 1.0,
+        fill: true,
+    };
+    let pixelate = AnnotationShape::Pixelate {
+        rect: rect(200.0, 120.0, 48.0, 24.0),
+        block: 24.0,
+    };
+    let scene = annotated(
+        settings,
+        vec![(marker.clone(), 0.0, 6_000.0), (pixelate, 0.0, 6_000.0)],
+    );
+    // A red image two pixels per point, a point larger than the marker on each side.
+    let red = [230u8, 20, 30, 255].repeat(24 * 14);
+    scene.rasters.insert(
+        marker.look_key().unwrap(),
+        Raster::new(24, 14, red, (-1.0, -1.0), (12.0, 7.0)).unwrap(),
+    );
+    let mut compositor = Compositor::new(SCREEN_W, SCREEN_H, PixelFormat::Rgba8).unwrap();
+    let pixels = compositor
+        .frame(&scene, &mut Pattern::new(), 3_000.0)
+        .unwrap();
+    assert_eq!(compositor.missing_rasters(), 0);
+    let camera = scene.timeline.camera(3_000.0);
+    assert!((camera.scale - 2.0).abs() < 1e-6);
+    // The view shows screen points 160..480 × 100..300 at 2 output pixels per point.
+    let out = |x: f64, y: f64| (((x - 160.0) * 2.0) as u32, ((y - 100.0) * 2.0) as u32);
+    let (x, y) = out(305.0, 202.5);
+    assert!(close(
+        pixel(&pixels, SCREEN_W, x, y),
+        [230.0, 20.0, 30.0],
+        3.0
+    ));
+    let (x, y) = out(299.5, 199.5);
+    assert!(close(
+        pixel(&pixels, SCREEN_W, x, y),
+        [230.0, 20.0, 30.0],
+        3.0
+    ));
+    let (x, y) = out(311.5, 206.5);
+    assert!(!close(
+        pixel(&pixels, SCREEN_W, x, y),
+        [230.0, 20.0, 30.0],
+        30.0
+    ));
+
+    // Cells stay 24 recorded pixels wide: 48 output pixels when zoomed in twice.
+    let cells = cell_averages((200, 120, 48, 24), 24);
+    for (column, sx) in [(0, 205.0), (1, 240.0)] {
+        let (x, y) = out(sx, 130.0);
+        assert!(
+            close(pixel(&pixels, SCREEN_W, x, y), cells[0][column], 1.5),
+            "cell {column}"
+        );
+    }
+}
+
+#[test]
+fn annotations_show_only_in_their_time_range() {
+    let marker = AnnotationShape::Highlight {
+        rect: rect(10.0, 10.0, 50.0, 30.0),
+        color: Color::rgb(255, 214, 10),
+    };
+    let blur = AnnotationShape::Blur {
+        rect: rect(300.0, 200.0, 100.0, 60.0),
+        block: 12.0,
+    };
+    let mut scene = annotated(
+        plain_settings(),
+        vec![(marker.clone(), 1_000.0, 2_000.0), (blur, 1_000.0, 2_000.0)],
+    );
+    let plain = render_native(&scene, 500.0);
+    let mut compositor = Compositor::new(SCREEN_W, SCREEN_H, PixelFormat::Rgba8).unwrap();
+    compositor
+        .frame(&scene, &mut Pattern::new(), 1_500.0)
+        .unwrap();
+    assert_eq!(compositor.missing_rasters(), 1);
+    assert_eq!(scene.missing_rasters(), ["a0"]);
+
+    scene.rasters.insert(
+        marker.look_key().unwrap(),
+        Raster::new(1, 1, vec![255, 214, 10, 102], (0.0, 0.0), (50.0, 30.0)).unwrap(),
+    );
+    let shown = compositor
+        .frame(&scene, &mut Pattern::new(), 1_500.0)
+        .unwrap();
+    assert_eq!(compositor.missing_rasters(), 0);
+    assert!(scene.missing_rasters().is_empty());
+    let differs = |a: &[u8], x: u32, y: u32| {
+        !close(pixel(a, SCREEN_W, x, y), pixel(&plain, SCREEN_W, x, y), 3.0)
+    };
+    assert!(differs(&shown, 30, 20) && differs(&shown, 350, 220));
+    for t in [999.0, 2_001.0] {
+        let hidden = compositor.frame(&scene, &mut Pattern::new(), t).unwrap();
+        assert!(
+            !differs(&hidden, 30, 20) && !differs(&hidden, 350, 220),
+            "{t}"
+        );
+    }
+
+    scene.hidden = Some("a0".into());
+    let without = compositor
+        .frame(&scene, &mut Pattern::new(), 1_500.0)
+        .unwrap();
+    assert!(!differs(&without, 30, 20) && differs(&without, 350, 220));
+    assert!(scene.missing_rasters().is_empty());
+}
+
+fn red_marker() -> (AnnotationShape, Raster) {
+    let shape = AnnotationShape::Rect {
+        rect: rect(100.0, 100.0, 80.0, 40.0),
+        color: Color::rgb(230, 20, 30),
+        width: 1.0,
+        fill: true,
+    };
+    let raster = Raster::new(1, 1, vec![230, 20, 30, 255], (0.0, 0.0), (80.0, 40.0)).unwrap();
+    (shape, raster)
+}
+
+#[test]
+fn blur_on_a_later_track_covers_the_marks_under_it() {
+    let (marker, raster) = red_marker();
+    let blur = AnnotationShape::Blur {
+        rect: rect(140.0, 90.0, 100.0, 60.0),
+        block: 12.0,
+    };
+    let red = [230.0, 20.0, 30.0];
+    for (mark_track, blur_track, covered) in [(0, 1, true), (1, 0, false)] {
+        let mut scene = annotated(plain_settings(), vec![]);
+        let mut settings = scene.settings.clone();
+        settings.annotations = Annotations {
+            tracks: 2,
+            items: vec![
+                Annotation {
+                    id: "mark".into(),
+                    start_ms: 0.0,
+                    end_ms: 6_000.0,
+                    track: mark_track,
+                    shape: marker.clone(),
+                },
+                Annotation {
+                    id: "blur".into(),
+                    start_ms: 0.0,
+                    end_ms: 6_000.0,
+                    track: blur_track,
+                    shape: blur.clone(),
+                },
+            ],
+        };
+        scene.set_settings(&EventLog::default(), settings);
+        scene
+            .rasters
+            .insert(marker.look_key().unwrap(), raster.clone());
+        let pixels = render_native(&scene, 500.0);
+        assert!(close(pixel(&pixels, SCREEN_W, 120, 120), red, 3.0));
+        let inside = pixel(&pixels, SCREEN_W, 160, 120);
+        assert_eq!(
+            !close(inside, red, 30.0),
+            covered,
+            "blur on track {blur_track}: {inside:?}"
+        );
+    }
+}
+
+#[test]
+fn a_changed_annotation_keeps_its_image_until_the_new_one_arrives() {
+    let (marker, raster) = red_marker();
+    let mut scene = annotated(plain_settings(), vec![(marker.clone(), 0.0, 6_000.0)]);
+    scene.rasters.insert(marker.look_key().unwrap(), raster);
+    let mut compositor = Compositor::new(SCREEN_W, SCREEN_H, PixelFormat::Rgba8).unwrap();
+    compositor.frame(&scene, &mut Pattern::new(), 0.0).unwrap();
+
+    let mut settings = scene.settings.clone();
+    let AnnotationShape::Rect { color, .. } = &mut settings.annotations.items[0].shape else {
+        unreachable!()
+    };
+    *color = Color::rgb(0, 0, 255);
+    scene.set_settings(&EventLog::default(), settings);
+    let pixels = compositor.frame(&scene, &mut Pattern::new(), 0.0).unwrap();
+    assert_eq!(compositor.missing_rasters(), 1);
+    assert!(close(
+        pixel(&pixels, SCREEN_W, 120, 120),
+        [230.0, 20.0, 30.0],
+        3.0
+    ));
+
+    // Edited in the editor while hidden, it doesn't come back with the old image.
+    scene.hidden = Some("a0".into());
+    compositor.frame(&scene, &mut Pattern::new(), 0.0).unwrap();
+    scene.hidden = None;
+    let pixels = compositor.frame(&scene, &mut Pattern::new(), 0.0).unwrap();
+    assert_eq!(compositor.missing_rasters(), 1);
+    assert!(!close(
+        pixel(&pixels, SCREEN_W, 120, 120),
+        [230.0, 20.0, 30.0],
+        30.0
+    ));
 }

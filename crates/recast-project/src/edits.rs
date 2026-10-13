@@ -3,6 +3,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::Annotations;
+
 pub const EDITS_VERSION: u32 = 1;
 
 /// An sRGB color, written as `#rrggbb` or `#rrggbbaa`.
@@ -381,6 +383,7 @@ pub struct EditSettings {
     pub audio: AudioMix,
     pub trim: Trim,
     pub export: ExportSettings,
+    pub annotations: Annotations,
 }
 
 impl Default for EditSettings {
@@ -395,6 +398,7 @@ impl Default for EditSettings {
             audio: AudioMix::default(),
             trim: Trim::default(),
             export: ExportSettings::default(),
+            annotations: Annotations::default(),
         }
     }
 }
@@ -444,6 +448,7 @@ impl EditSettings {
         s.audio.mic_volume = clamp(s.audio.mic_volume, 0.0, 2.0, 1.0);
         s.audio.system_volume = clamp(s.audio.system_volume, 0.0, 2.0, 1.0);
         s.export.quality = clamp(s.export.quality, 0.0, 1.0, 0.7);
+        s.annotations = s.annotations.sanitized(duration_ms);
 
         let duration = duration_ms.max(0.0);
         let start = clamp(s.trim.start_ms, 0.0, duration, 0.0);

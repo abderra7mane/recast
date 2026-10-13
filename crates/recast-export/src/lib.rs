@@ -86,6 +86,13 @@ pub fn export(
     let bundle = Bundle::open(request.bundle)?;
     let project = bundle.load_project()?;
     let scene = Scene::load(&bundle, request.settings.clone())?;
+    let missing = scene.missing_rasters();
+    if !missing.is_empty() {
+        return Err(Error::Media(format!(
+            "{} annotations have no image yet; open the project in Recast to prepare them",
+            missing.len()
+        )));
+    }
     let settings = &scene.settings;
     let recording = &project.recording;
     let (start_ms, end_ms) = settings.trim_range(recording.duration_ms);

@@ -1,6 +1,6 @@
-//! Saves `project.json` in the background once edits pause, so typing or dragging
-//! does not write on every change. `Bundle::save_project` replaces the file
-//! atomically.
+//! Saves `project.json` and the annotation images it uses in the background once
+//! edits pause, so typing or dragging does not write on every change.
+//! `Bundle::save_project` replaces the file atomically.
 
 use std::{
     sync::{
@@ -13,6 +13,7 @@ use std::{
 };
 
 use recast_project::{Bundle, Project};
+use recast_render::annotations::{self, Rasters, SPARE_BYTES};
 
 /// Edits keep arriving for at most this long before a save happens anyway.
 const MAX_DELAY: Duration = Duration::from_secs(5);
@@ -29,14 +30,14 @@ pub struct Autosave {
 }
 
 impl Autosave {
-    pub fn start(bundle: Bundle, delay: Duration) -> Self {
+    pub fn start(bundle: Bundle, delay: Duration, rasters: Arc<Rasters>) -> Self {
         let (tx, rx) = mpsc::channel();
         let writes = Arc::new(AtomicU64::new(0));
         let thread = {
             let writes = writes.clone();
             thread::Builder::new()
                 .name("autosave".into())
-                .spawn(move || run(&bundle, delay, &rx, &writes))
+                .spawn(move || run(&bundle, &rasters, delay, &rx, &writes))
                 .ok()
         };
         Self {
@@ -78,16 +79,30 @@ impl Drop for Autosave {
     }
 }
 
-fn run(bundle: &Bundle, delay: Duration, rx: &mpsc::Receiver<Message>, writes: &AtomicU64) {
+fn run(
+    bundle: &Bundle,
+    rasters: &Rasters,
+    delay: Duration,
+    rx: &mpsc::Receiver<Message>,
+    writes: &AtomicU64,
+) {
     let mut pending: Option<(Box<Project>, Instant)> = None;
     let write = |pending: &mut Option<(Box<Project>, Instant)>| -> Result<(), String> {
         let Some((project, _)) = pending.take() else {
             return Ok(());
         };
-        bundle.save_project(&project).map_err(|e| {
+        let fail = |e: String| {
             log::warn!("autosave failed: {e}");
-            e.to_string()
-        })?;
+            e
+        };
+        bundle
+            .save_project(&project)
+            .map_err(|e| fail(e.to_string()))?;
+        let used = &project.edits.annotations;
+        rasters
+            .save(&bundle.file(annotations::DIR), used)
+            .map_err(|e| fail(e.to_string()))?;
+        rasters.trim(used, SPARE_BYTES);
         writes.fetch_add(1, Ordering::SeqCst);
         Ok(())
     };
@@ -141,7 +156,7 @@ mod tests {
     fn saves_once_edits_pause_and_round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let (bundle, mut project) = bundle(dir.path());
-        let autosave = Autosave::start(bundle.clone(), Duration::from_millis(80));
+        let autosave = Autosave::start(bundle.clone(), Duration::from_millis(80), Arc::default());
         for level in [2.5, 3.0, 3.5] {
             project.edits.zoom.level = level;
             project.edits.background.padding = level / 10.0;
@@ -160,7 +175,7 @@ mod tests {
     fn flush_and_drop_write_pending_edits() {
         let dir = tempfile::tempdir().unwrap();
         let (bundle, mut project) = bundle(dir.path());
-        let autosave = Autosave::start(bundle.clone(), Duration::from_secs(60));
+        let autosave = Autosave::start(bundle.clone(), Duration::from_secs(60), Arc::default());
         project.edits = EditSettings {
             trim: recast_project::Trim {
                 start_ms: 100.0,

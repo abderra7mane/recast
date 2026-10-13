@@ -1,4 +1,8 @@
-import type { EditSettings, ZoomSegment } from "@/bindings";
+import type {
+  Annotation as AnnotationBinding,
+  EditSettings,
+  ZoomSegment,
+} from "@/bindings";
 
 /**
  * The generated types mark fields with serde defaults as optional and Rust `f64`
@@ -13,6 +17,9 @@ export type Complete<T> = T extends (infer U)[]
 
 export type Settings = Complete<EditSettings>;
 export type Segment = Complete<ZoomSegment>;
+export type Annotation = Complete<AnnotationBinding>;
+export type AnnotationShape = Annotation["shape"];
+export type Annotations = Settings["annotations"];
 export type Section = Exclude<keyof Settings, "version">;
 
 export const FRAME_MS = 1000 / 60;

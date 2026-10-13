@@ -14,7 +14,8 @@ use std::{
     time::Duration,
 };
 
-use recast_project::{Bundle, EditSettings, MouseButton, Project, ZoomSegment};
+use recast_project::{AnnotationShape, Bundle, EditSettings, MouseButton, Project, ZoomSegment};
+use recast_render::annotations::{self, Raster, Rasters, SPARE_BYTES};
 use recast_zoom::{Click, Timeline, auto_segments};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -42,12 +43,38 @@ pub struct EditorInit {
     pub duration_ms: f64,
     /// Segments auto zoom generates at the saved zoom level.
     pub auto_segments: Vec<ZoomSegment>,
+    /// Annotations whose image the editor has to send.
+    pub missing_rasters: Vec<String>,
     /// Button presses inside the recorded area.
     pub clicks: Vec<ClickMarker>,
     /// WebSocket URL of the preview stream, including its token.
     pub preview_url: String,
     /// Suggested path for an export.
     pub export_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsApplied {
+    /// Segments auto zoom generates for the settings.
+    pub auto_segments: Vec<ZoomSegment>,
+    /// Annotations whose image the editor has to send.
+    pub missing_rasters: Vec<String>,
+}
+
+/// Where an annotation image goes; sent ahead of its pixels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RasterPlacement {
+    /// The shape drawn, which keys the image.
+    pub shape: AnnotationShape,
+    pub width: u32,
+    pub height: u32,
+    /// Top-left corner, in points from the shape's anchor.
+    pub x: f64,
+    pub y: f64,
+    pub width_pts: f64,
+    pub height_pts: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -79,6 +106,7 @@ pub struct EditorSession {
     player: Player,
     server: Arc<PreviewServer>,
     autosave: Autosave,
+    rasters: Arc<Rasters>,
     seeks: OrderGate,
     edits: OrderGate,
 }
@@ -118,14 +146,16 @@ impl EditorSession {
             .clicks()
             .to_vec();
         let server = Arc::new(PreviewServer::start().map_err(|e| e.to_string())?);
+        let rasters = Arc::new(Rasters::load(&bundle.file(annotations::DIR)));
         let player = Player::start(PlayerInit {
             bundle_dir: bundle.path().to_path_buf(),
             project: project.clone(),
             events,
             settings: settings.clone(),
             server: server.clone(),
+            rasters: rasters.clone(),
         })?;
-        let autosave = Autosave::start(bundle.clone(), AUTOSAVE_DELAY);
+        let autosave = Autosave::start(bundle.clone(), AUTOSAVE_DELAY, rasters.clone());
         Ok(Self {
             bundle,
             project: Mutex::new(Project {
@@ -137,6 +167,7 @@ impl EditorSession {
             player,
             server,
             autosave,
+            rasters,
             seeks: OrderGate::default(),
             edits: OrderGate::default(),
         })
@@ -160,6 +191,7 @@ impl EditorSession {
         EditorInit {
             bundle_path: self.bundle.path().display().to_string(),
             auto_segments: self.auto_segments(&settings),
+            missing_rasters: self.rasters.missing(&settings.annotations, None),
             clicks: self
                 .clicks
                 .iter()
@@ -182,20 +214,58 @@ impl EditorSession {
         }
     }
 
-    /// Applies edits to the preview and schedules a save. Returns the segments auto
-    /// zoom generates for them, or `None` when a newer `seq` was already applied.
-    pub fn set_settings(&self, settings: EditSettings, seq: u32) -> Option<Vec<ZoomSegment>> {
+    /// Applies edits to the preview, leaving out the annotation `hidden`, and schedules
+    /// a save. Returns the segments auto zoom generates for them and the annotations
+    /// whose image is missing, or `None` when a newer `seq` was already applied.
+    pub fn set_settings(
+        &self,
+        settings: EditSettings,
+        hidden: Option<String>,
+        seq: u32,
+    ) -> Option<SettingsApplied> {
         let settings = settings.sanitized(self.duration_ms);
-        let segments = self.auto_segments(&settings);
-        let applied = self.edits.admit(seq, || {
+        let applied = SettingsApplied {
+            auto_segments: self.auto_segments(&settings),
+            missing_rasters: self
+                .rasters
+                .missing(&settings.annotations, hidden.as_deref()),
+        };
+        let admitted = self.edits.admit(seq, || {
             let mut project = self.project.lock().expect("project lock");
             if project.edits != settings {
                 project.edits = settings.clone();
                 self.autosave.save(project.clone());
-                self.player.send(Command::Settings(Box::new(settings)));
             }
+            self.player.send(Command::Settings {
+                settings: Box::new(settings),
+                hidden,
+                seq,
+            });
         });
-        applied.then_some(segments)
+        admitted.then_some(applied)
+    }
+
+    /// Keeps an annotation image the editor drew, `rgba` being straight RGBA pixels,
+    /// and saves it with the edits.
+    pub fn add_raster(&self, placement: RasterPlacement, rgba: Vec<u8>) -> Result<(), String> {
+        let key = placement
+            .shape
+            .look_key()
+            .ok_or("blur and pixelate have no image")?;
+        let raster = Raster::new(
+            placement.width,
+            placement.height,
+            rgba,
+            (placement.x, placement.y),
+            (placement.width_pts, placement.height_pts),
+        )
+        .map_err(|e| e.to_string())?;
+        self.rasters.insert(key, raster);
+        let project = self.project.lock().expect("project lock").clone();
+        self.rasters.trim(&project.edits.annotations, SPARE_BYTES);
+        self.player.send(Command::Redraw);
+        self.autosave.save(project);
+        Ok(())
     }
 
     pub fn play(&self) {
@@ -219,6 +289,11 @@ impl EditorSession {
     pub fn reset_sequences(&self) {
         self.seeks.reset();
         self.edits.reset();
+        self.player.send(Command::Settings {
+            settings: Box::new(self.settings()),
+            hidden: None,
+            seq: 0,
+        });
     }
 
     pub fn set_loop(&self, looping: bool) {
@@ -529,15 +604,100 @@ mod playback_tests {
         let mut older = session.settings();
         older.background.padding = 0.1;
 
-        assert!(session.set_settings(newer.clone(), 2).is_some());
-        assert!(session.set_settings(older, 1).is_none());
+        assert!(session.set_settings(newer.clone(), None, 2).is_some());
+        assert!(session.set_settings(older, None, 1).is_none());
         assert_eq!(session.settings().background.padding, 0.3);
         session.flush().unwrap();
         let saved = Bundle::open(&path).unwrap().load_project().unwrap();
         assert_eq!(saved.edits.background.padding, 0.3);
 
         session.reset_sequences();
-        assert!(session.set_settings(newer, 1).is_some());
+        assert!(session.set_settings(newer, None, 1).is_some());
+    }
+
+    fn frame_with_edits(socket: &mut Socket, edits: u32) -> FrameHeader {
+        let started = Instant::now();
+        loop {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "no frame with edits {edits}"
+            );
+            let frame = next_frame(socket);
+            if frame.edits == edits {
+                return frame;
+            }
+        }
+    }
+
+    #[test]
+    fn annotation_images_complete_the_preview_and_are_saved() {
+        use recast_project::{Annotation, AnnotationShape, Color, Rect};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_support::fixture(dir.path());
+        let session = EditorSession::open(&path).unwrap();
+        let mut socket = connect(&session.init().preview_url);
+        let shape = AnnotationShape::Rect {
+            rect: Rect {
+                x: 20.0,
+                y: 20.0,
+                width: 100.0,
+                height: 60.0,
+            },
+            color: Color::rgb(255, 59, 48),
+            width: 3.0,
+            fill: false,
+        };
+        let mut settings = session.settings();
+        settings.annotations.items.push(Annotation {
+            id: "box".into(),
+            start_ms: 0.0,
+            end_ms: 2_000.0,
+            track: 0,
+            shape: shape.clone(),
+        });
+
+        let hidden = session
+            .set_settings(settings.clone(), Some("box".into()), 1)
+            .unwrap();
+        assert!(hidden.missing_rasters.is_empty());
+        assert!(frame_with_edits(&mut socket, 1).complete);
+
+        let applied = session.set_settings(settings.clone(), None, 2).unwrap();
+        assert_eq!(applied.missing_rasters, ["box"]);
+        assert!(!frame_with_edits(&mut socket, 2).complete);
+
+        let placement = RasterPlacement {
+            shape: shape.clone(),
+            width: 2,
+            height: 2,
+            x: -2.0,
+            y: -2.0,
+            width_pts: 104.0,
+            height_pts: 64.0,
+        };
+        assert!(
+            session
+                .add_raster(placement.clone(), vec![255; 15])
+                .is_err()
+        );
+        session.add_raster(placement, vec![255; 16]).unwrap();
+        let started = Instant::now();
+        while !next_frame(&mut socket).complete {
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
+        session.flush().unwrap();
+        drop(session);
+
+        let reopened = EditorSession::open(&path).unwrap();
+        let init = reopened.init();
+        assert_eq!(init.settings.annotations.items.len(), 1);
+        assert!(init.missing_rasters.is_empty());
+        assert!(
+            path.join(recast_render::annotations::DIR)
+                .join("index.json")
+                .is_file()
+        );
     }
 
     #[test]
@@ -556,7 +716,7 @@ mod playback_tests {
             start_ms: 0.0,
             end_ms: Some(1_500.0),
         };
-        session.set_settings(settings, 1);
+        session.set_settings(settings, None, 1);
         session.seek(500.0, 2);
         session.play();
         let (first, played, end) = play_through(&mut socket);

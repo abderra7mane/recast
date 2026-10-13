@@ -1,6 +1,8 @@
 //! The compositor shared by preview and export: draws the background, the screen
-//! recording with zoom, rounded corners and shadow, the cursor and click ripples.
+//! recording with zoom, rounded corners and shadow, the cursor, click ripples and
+//! annotations.
 
+pub mod annotations;
 pub mod bitmap;
 mod compositor;
 pub mod cursor;

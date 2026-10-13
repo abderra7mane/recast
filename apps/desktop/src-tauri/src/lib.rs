@@ -344,6 +344,22 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
         ])
 }
 
+/// Routes the commands that carry raw bytes, which the typed bindings can't describe,
+/// and hands every other command to `typed`.
+fn with_raw_commands(
+    typed: impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    let raw: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        markup::markup_image,
+        markup::markup_stage,
+        editor_commands::editor_annotation_raster
+    ];
+    move |invoke| match invoke.message.command() {
+        "markup_image" | "markup_stage" | "editor_annotation_raster" => raw(invoke),
+        _ => typed(invoke),
+    }
+}
+
 pub const BINDINGS_PATH: &str = "src/bindings.ts";
 
 pub fn export_bindings(path: &Path) -> Result<(), String> {
@@ -432,7 +448,7 @@ pub fn run() {
         .manage(hotkeys::Hotkeys::default())
         .manage(tray::TrayState::default())
         .manage(updates::Pending::default())
-        .invoke_handler(markup::with_raw_commands(builder.invoke_handler()))
+        .invoke_handler(with_raw_commands(builder.invoke_handler()))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 activation::window_destroyed(window.app_handle(), window.label());

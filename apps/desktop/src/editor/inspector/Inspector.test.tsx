@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Project } from "@/bindings";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { segment, settings } from "@/editor/fixtures.test-util";
+import { annotation, segment, settings } from "@/editor/fixtures.test-util";
 import type { Settings } from "@/editor/settings";
 
 const commands = vi.hoisted(() => ({ clickSoundPreview: vi.fn() }));
@@ -40,6 +40,7 @@ const TABS = [
   "background",
   "cursor",
   "zoom",
+  "annotations",
   "clicks",
   "audio",
   "export",
@@ -111,6 +112,56 @@ describe("Inspector", () => {
     act(() => editorStore.getState().select(0));
     expect(screen.getByText("Horizontal")).toBeTruthy();
     expect(controlsWithoutHint(container)).toEqual([]);
+  });
+
+  it.each([
+    ["rect", undefined],
+    [
+      "text",
+      {
+        kind: "text",
+        at: { x: 1, y: 2 },
+        text: "Hi",
+        color: "#ffffff",
+        fontSize: 20,
+      },
+    ],
+    [
+      "blur",
+      { kind: "blur", rect: { x: 1, y: 2, width: 30, height: 40 }, block: 12 },
+    ],
+  ] as const)(
+    "gives the options of a selected %s annotation hints",
+    (_, shape) => {
+      const { container } = show("annotations", (s) => {
+        s.annotations = {
+          tracks: 2,
+          items: [annotation("a", 1000, 4000, 1, shape)],
+        };
+      });
+      act(() => editorStore.getState().selectAnnotation("a"));
+      expect(screen.getByText("Timing")).toBeTruthy();
+      const unexplained = controlsWithoutHint(container).filter(
+        (control) => !control.closest('[aria-label="Colors"]'),
+      );
+      expect(unexplained).toEqual([]);
+    },
+  );
+
+  it("lists the annotation layers and deletes one", async () => {
+    show("annotations", (s) => {
+      s.annotations = {
+        tracks: 3,
+        items: [annotation("a", 0, 1000, 0), annotation("b", 0, 1000, 2)],
+      };
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Delete layer 1" }));
+    expect(editorStore.getState().settings!.annotations).toEqual({
+      tracks: 2,
+      items: [annotation("b", 0, 1000, 1)],
+    });
   });
 
   it("says plainly which audio a recording lacks", () => {

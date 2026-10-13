@@ -17,6 +17,7 @@ help:
 	@echo "simulate  record generated video/audio/input (no permissions needed): make simulate ARGS='--seconds 5'"
 	@echo "export    export a bundle to MP4: make export BUNDLE=path ARGS='--set export.fps=30 --out out.mp4'"
 	@echo "bench-preview measure editor preview seek latency and frame rate: make bench-preview BUNDLE=path [PROFILE=dev]"
+	@echo "bench-annotations measure what annotations cost the compositor per frame: make bench-annotations [FRAMES=120]"
 	@echo "update-goldens  re-render the golden images of the compositor and markup tests"
 	@echo "sounds    regenerate the bundled click sounds"
 	@echo "unfinished list bundles left by a crash"
@@ -87,6 +88,11 @@ PROFILE ?= release
 
 bench-preview:
 	cargo run --quiet --profile $(PROFILE) -p recast-desktop --example preview-bench -- "$(BUNDLE)"
+
+FRAMES ?= 120
+
+bench-annotations:
+	cargo run --quiet --profile $(PROFILE) -p recast-render --example annotation-bench -- $(FRAMES)
 
 update-goldens: install
 	UPDATE_GOLDENS=1 cargo test -p recast-render --test golden

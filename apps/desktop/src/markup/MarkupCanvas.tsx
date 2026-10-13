@@ -18,7 +18,6 @@ import {
   resizeCrop,
 } from "@/markup/crop";
 import {
-  bounds,
   constrainAxis,
   drawPoint,
   handleAt,
@@ -26,20 +25,28 @@ import {
   hits,
   hitTest,
   moveShape,
-  rectFrom,
   rectHandles,
   resizeShape,
   type Handle,
 } from "@/markup/geometry";
+import {
+  drawHandle,
+  drawnTo,
+  drawSelection,
+  GRAB,
+  MIN_DRAWN,
+  newShape,
+  RESIZE_CURSORS,
+  TOOL_CURSORS,
+  tooSmall,
+} from "@/markup/interaction";
 import { createLatestRunner } from "@/markup/latest";
 import type {
   Background,
-  NewShape,
   Point,
   Rect,
   Shape,
   Size,
-  Style,
   TextShape,
   Tool,
 } from "@/markup/model";
@@ -61,13 +68,6 @@ import {
   type ViewMap,
 } from "@/markup/view";
 
-/** Handle squares and how close the pointer must be to grab them, in CSS pixels. */
-const HANDLE_SIZE = 8;
-const GRAB = 7;
-/** Shapes drawn smaller than this, in CSS pixels, are dropped. */
-const MIN_DRAWN = 3;
-const ACCENT = "#0a84ff";
-
 type Drag =
   | { kind: "create"; id: string; tool: Tool; from: Point }
   | { kind: "move"; start: Shape; from: Point }
@@ -75,73 +75,6 @@ type Drag =
   | { kind: "crop-move"; start: Rect; from: Point }
   | { kind: "crop-resize"; start: Rect; handle: Handle }
   | { kind: "crop-new"; from: Point };
-
-function newShape(tool: Tool, at: Point, style: Style): NewShape | null {
-  const rect = { ...at, width: 0, height: 0 };
-  switch (tool) {
-    case "arrow":
-    case "line":
-      return {
-        kind: tool,
-        from: at,
-        to: at,
-        color: style.color,
-        width: style.width,
-      };
-    case "rect":
-    case "ellipse":
-      return {
-        kind: tool,
-        rect,
-        color: style.color,
-        width: style.width,
-        fill: style.fill,
-      };
-    case "highlight":
-      return { kind: tool, rect, color: style.highlight };
-    case "blur":
-    case "pixelate":
-      return { kind: tool, rect };
-    default:
-      return null;
-  }
-}
-
-function drawnTo(shape: Shape, from: Point, to: Point): Shape {
-  if (shape.kind === "arrow" || shape.kind === "line") return { ...shape, to };
-  if ("rect" in shape) return { ...shape, rect: rectFrom(from, to) };
-  return shape;
-}
-
-function tooSmall(shape: Shape, minimum: number) {
-  if (shape.kind === "arrow" || shape.kind === "line") {
-    return (
-      Math.hypot(shape.to.x - shape.from.x, shape.to.y - shape.from.y) < minimum
-    );
-  }
-  if ("rect" in shape) {
-    return shape.rect.width < minimum || shape.rect.height < minimum;
-  }
-  return false;
-}
-
-const RESIZE_CURSORS: Record<Handle, string> = {
-  nw: "nwse-resize",
-  se: "nwse-resize",
-  ne: "nesw-resize",
-  sw: "nesw-resize",
-  n: "ns-resize",
-  s: "ns-resize",
-  e: "ew-resize",
-  w: "ew-resize",
-  start: "move",
-  end: "move",
-};
-
-const TOOL_CURSORS: Partial<Record<Tool, string>> = {
-  select: "default",
-  text: "text",
-};
 
 /** The Beautify frame around the picture, rendered by the backend without it. */
 function useFrame(
@@ -420,15 +353,7 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
     }
 
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    const square = (p: Point) => {
-      const at = toView(map, p);
-      const half = HANDLE_SIZE / 2;
-      ctx.fillStyle = "#ffffff";
-      ctx.strokeStyle = ACCENT;
-      ctx.lineWidth = 1.5;
-      ctx.fillRect(at.x - half, at.y - half, HANDLE_SIZE, HANDLE_SIZE);
-      ctx.strokeRect(at.x - half, at.y - half, HANDLE_SIZE, HANDLE_SIZE);
-    };
+    const square = (p: Point) => drawHandle(ctx, toView(map, p));
     const viewRect = (rect: Rect) => {
       const a = toView(map, rect);
       const b = toView(map, {
@@ -460,15 +385,9 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
       ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
       rectHandles(doc.crop ?? fullRect(image)).forEach(({ at }) => square(at));
     } else if (selectedShape && selectedShape.id !== editing) {
-      if (selectedShape.kind !== "arrow" && selectedShape.kind !== "line") {
-        const box = viewRect(bounds(selectedShape, renderer.measure));
-        ctx.setLineDash([4, 3]);
-        ctx.strokeStyle = ACCENT;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(box.x, box.y, box.width, box.height);
-        ctx.setLineDash([]);
-      }
-      handles(selectedShape, renderer.measure).forEach(({ at }) => square(at));
+      drawSelection(ctx, selectedShape, renderer.measure, (p) =>
+        toView(map, p),
+      );
     }
   });
 

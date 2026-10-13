@@ -1,5 +1,8 @@
 import type { Segment } from "@/editor/settings";
 
+/** Anything with a time range, such as a zoom segment or an annotation. */
+export type Span = { startMs: number; endMs: number };
+
 export const MIN_SEGMENT_MS = 300;
 export const NEW_SEGMENT_MS = 2000;
 export const MIN_TRIM_MS = 100;
@@ -43,23 +46,23 @@ export function rulerTicks(
 }
 
 /** Free time around segment `i`: from the previous segment's end to the next one's start. */
-function room(segments: Segment[], i: number, durationMs: number) {
+function room(segments: Span[], i: number, durationMs: number) {
   return {
     min: i > 0 ? segments[i - 1].endMs : 0,
     max: i < segments.length - 1 ? segments[i + 1].startMs : durationMs,
   };
 }
 
-const replace = (segments: Segment[], i: number, segment: Segment) =>
+const replace = <T extends Span>(segments: T[], i: number, segment: T) =>
   segments.map((s, j) => (j === i ? segment : s));
 
 /** Moves segment `i` by `deltaMs`, keeping its length and stopping at its neighbors. */
-export function moveSegment(
-  segments: Segment[],
+export function moveSegment<T extends Span>(
+  segments: T[],
   i: number,
   deltaMs: number,
   durationMs: number,
-): Segment[] {
+): T[] {
   const segment = segments[i];
   if (!segment) return segments;
   const { min, max } = room(segments, i, durationMs);
@@ -73,13 +76,13 @@ export function moveSegment(
 }
 
 /** Moves one edge of segment `i` to `tMs`, keeping a minimum length and its neighbors. */
-export function resizeSegment(
-  segments: Segment[],
+export function resizeSegment<T extends Span>(
+  segments: T[],
   i: number,
   edge: "start" | "end",
   tMs: number,
   durationMs: number,
-): Segment[] {
+): T[] {
   const segment = segments[i];
   if (!segment) return segments;
   const { min, max } = room(segments, i, durationMs);

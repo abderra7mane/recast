@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { commands } from "@/bindings";
 import { parseFrame, type Frame } from "@/editor/frame";
@@ -23,8 +23,22 @@ function fit(width: number, height: number, aspect: number) {
     : { width, height: width / aspect };
 }
 
-export function Preview({ url }: { url: string }) {
+export function Preview({
+  url,
+  onFrame,
+  children,
+}: {
+  url: string;
+  /** Called after each frame is drawn, in the same animation frame. */
+  onFrame?: (frame: Frame) => void;
+  /** Drawn over the frame, in a box of its size. */
+  children?: ReactNode;
+}) {
   const areaRef = useRef<HTMLDivElement>(null);
+  const frameShown = useRef(onFrame);
+  useEffect(() => {
+    frameShown.current = onFrame;
+  });
   const hostRef = useRef<HTMLDivElement>(null);
   const latest = useRef<Frame | null>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
@@ -91,7 +105,7 @@ export function Preview({ url }: { url: string }) {
         }
         renderer = created;
         created.canvas.className = "block h-full w-full";
-        hostRef.current?.appendChild(created.canvas);
+        hostRef.current?.prepend(created.canvas);
         playbackStore.setState({ renderer: created.kind });
       })
       .catch((e: unknown) => setError(String(e)));
@@ -109,6 +123,7 @@ export function Preview({ url }: { url: string }) {
       drawnSeq = frame.header.seq;
       renderer.draw(frame);
       frameDrawn(frame.header);
+      frameShown.current?.(frame);
       const now = performance.now();
       drawn = drawn.filter((t) => now - t < 1000);
       drawn.push(now);
@@ -143,7 +158,9 @@ export function Preview({ url }: { url: string }) {
             ? { width: size.width, height: size.height }
             : { visibility: "hidden" }
         }
-      />
+      >
+        {children}
+      </div>
       {error && (
         <p className="text-destructive absolute inset-0 flex items-center justify-center text-sm">
           {error}

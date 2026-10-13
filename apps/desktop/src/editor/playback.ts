@@ -16,6 +16,8 @@ export type PlaybackState = {
   fps: number;
   /** From the last seek to drawing its frame. */
   seekMs: number | null;
+  /** The `seq` of the last edits sent to the preview. */
+  editsSent: number;
 };
 
 export const playbackStore = createStore<PlaybackState>()(() => ({
@@ -26,6 +28,7 @@ export const playbackStore = createStore<PlaybackState>()(() => ({
   connected: false,
   fps: 0,
   seekMs: null,
+  editsSent: 0,
 }));
 
 export function usePlayback<T>(selector: (state: PlaybackState) => T): T {

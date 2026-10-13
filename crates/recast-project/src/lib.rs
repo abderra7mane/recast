@@ -1,3 +1,4 @@
+mod annotations;
 mod bundle;
 mod edits;
 mod events;
@@ -6,6 +7,7 @@ mod schema;
 #[cfg(test)]
 mod test_support;
 
+pub use annotations::*;
 pub use bundle::*;
 pub use edits::*;
 pub use events::*;

@@ -1,17 +1,27 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type PointerEvent,
 } from "react";
-import { Maximize2, ZoomIn, ZoomOut } from "lucide-react";
+import { Maximize2, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "cn";
 
 import type { ClickMarker } from "@/bindings";
 import { Button } from "@/components/ui/button";
+import {
+  AnnotationTrack,
+  type TrackPress,
+} from "@/editor/annotations/AnnotationTrack";
+import {
+  MAX_TRACKS,
+  moveAnnotation,
+  resizeAnnotation,
+} from "@/editor/annotations/model";
 import { usePlayback, seek, playbackStore } from "@/editor/playback";
-import { formatTime, type Segment } from "@/editor/settings";
+import { formatTime, type Annotation, type Segment } from "@/editor/settings";
 import { editorStore, useEditor, visibleSegments } from "@/editor/store";
 import { Tip } from "@/editor/Tip";
 import {
@@ -26,12 +36,26 @@ import {
 } from "@/editor/timeline-math";
 
 const GUTTER = 16;
+/** Height of an annotation track and the gap above it, in CSS pixels. */
+const TRACK_PITCH = 44;
 
 type Drag =
   | { kind: "seek" }
   | { kind: "trim"; edge: "start" | "end" }
   | { kind: "move"; index: number; origin: Segment[]; startX: number }
-  | { kind: "resize"; index: number; edge: "start" | "end"; origin: Segment[] };
+  | { kind: "resize"; index: number; edge: "start" | "end"; origin: Segment[] }
+  | {
+      kind: "annotation-move";
+      id: string;
+      origin: Annotation[];
+      startX: number;
+    }
+  | {
+      kind: "annotation-resize";
+      id: string;
+      edge: "start" | "end";
+      origin: Annotation[];
+    };
 
 function Playhead({ scale }: { scale: number }) {
   const timeMs = usePlayback((s) => s.timeMs);
@@ -51,8 +75,11 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
   const segments = useEditor(visibleSegments);
   const auto = useEditor((s) => s.settings?.zoom.auto ?? false);
   const selected = useEditor((s) => s.selected);
+  const tracks = useEditor((s) => s.settings?.annotations.tracks ?? 1);
+  const selectedAnnotation = useEditor((s) => s.selectedAnnotation);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const tracksRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const [scale, setScale] = useState(0.05);
   const [fitted, setFitted] = useState(true);
@@ -83,6 +110,13 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
       }),
     [scale],
   );
+
+  useEffect(() => {
+    if (selectedAnnotation === null) return;
+    scrollRef.current
+      ?.querySelector(`[data-annotation="${CSS.escape(selectedAnnotation)}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedAnnotation]);
 
   const zoom = (factor: number, anchorX?: number) => {
     const element = scrollRef.current;
@@ -115,6 +149,14 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
     return pxToTime(clientX - rect.left - GUTTER, scale, durationMs);
   };
 
+  const trackAt = (clientY: number) => {
+    const rect = tracksRef.current!.getBoundingClientRect();
+    return Math.min(
+      Math.max(Math.floor((clientY - rect.top) / TRACK_PITCH), 0),
+      tracks - 1,
+    );
+  };
+
   const start = (e: PointerEvent, next: Drag) => {
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -123,9 +165,37 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
     if (next.kind === "seek") seek(timeAt(e.clientX));
   };
 
+  const pressTrackRef = useRef<(e: PointerEvent, press: TrackPress) => void>(
+    () => {},
+  );
+  pressTrackRef.current = (e, press) =>
+    start(e, {
+      ...press,
+      origin: editorStore.getState().settings?.annotations.items ?? [],
+    });
+  const pressTrack = useCallback(
+    (e: PointerEvent, press: TrackPress) => pressTrackRef.current(e, press),
+    [],
+  );
+
+  /** The last pointer position not acted on yet; drags apply once per animation frame. */
+  const pointer = useRef<{ clientX: number; clientY: number } | null>(null);
+  const frameRequest = useRef(0);
+
   const move = (e: PointerEvent) => {
+    if (!drag.current) return;
+    pointer.current = { clientX: e.clientX, clientY: e.clientY };
+    if (!frameRequest.current) {
+      frameRequest.current = requestAnimationFrame(applyPointer);
+    }
+  };
+
+  const applyPointer = () => {
+    frameRequest.current = 0;
     const current = drag.current;
-    if (!current) return;
+    const e = pointer.current;
+    pointer.current = null;
+    if (!current || !e) return;
     const t = timeAt(e.clientX);
     const state = editorStore.getState();
     switch (current.kind) {
@@ -162,10 +232,34 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
           ),
         );
         break;
+      case "annotation-move":
+        state.setAnnotationItems(
+          moveAnnotation(
+            current.origin,
+            current.id,
+            (e.clientX - current.startX) / scale,
+            trackAt(e.clientY),
+            durationMs,
+          ),
+        );
+        break;
+      case "annotation-resize":
+        state.setAnnotationItems(
+          resizeAnnotation(
+            current.origin,
+            current.id,
+            current.edge,
+            t,
+            durationMs,
+          ),
+        );
+        break;
     }
   };
 
   const finish = () => {
+    cancelAnimationFrame(frameRequest.current);
+    applyPointer();
     if (drag.current && drag.current.kind !== "seek")
       editorStore.getState().endGesture();
     drag.current = null;
@@ -191,7 +285,7 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
         </span>
         <span className="text-muted-foreground truncate text-xs">
           · Drag the clip's ends to trim. Double-click the zoom track to add a
-          zoom.
+          zoom. Pick a tool above the video to annotate.
         </span>
         <div className="ml-auto flex items-center gap-1">
           <Tip label="Zoom the timeline out (⌘ scroll)">
@@ -231,11 +325,11 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
       </div>
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden select-none"
+        className="min-h-0 flex-1 overflow-auto pb-2 select-none"
       >
         <div
           ref={contentRef}
-          className="relative h-full"
+          className="relative min-h-full"
           style={{ width }}
           {...handlers}
         >
@@ -369,6 +463,30 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
                 ))}
               </div>
             ))}
+          </div>
+
+          <div ref={tracksRef} className="mt-2 space-y-2">
+            {Array.from({ length: tracks }, (_, track) => (
+              <AnnotationTrack
+                key={track}
+                track={track}
+                scale={scale}
+                durationMs={durationMs}
+                gutter={GUTTER}
+                onPress={pressTrack}
+              />
+            ))}
+          </div>
+          <div className="sticky left-0 mt-1 inline-block pl-3">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground h-7 text-xs"
+              disabled={tracks >= MAX_TRACKS}
+              onClick={() => editorStore.getState().addTrack()}
+            >
+              <Plus /> Add layer
+            </Button>
           </div>
         </div>
       </div>

@@ -12,13 +12,19 @@ use std::{
 };
 
 use recast_export::{ExportRequest, Progress};
-use recast_project::{EditSettings, SoundPack, ZoomSegment};
+use recast_project::{EditSettings, SoundPack};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{
+    AppHandle, Manager, State, WebviewWindow,
+    ipc::{InvokeBody, Request},
+};
 use tauri_specta::Event;
 
-use super::{EditorInit, EditorSession, EditorStatus, PreviewStats, ProjectSummary};
+use super::{
+    EditorInit, EditorSession, EditorStatus, PreviewStats, ProjectSummary, RasterPlacement,
+    SettingsApplied,
+};
 use crate::settings::SettingsStore;
 
 pub const LABEL_PREFIX: &str = "editor-";
@@ -207,18 +213,50 @@ pub async fn editor_open(
     Ok(kept.init())
 }
 
-/// Applies edits to the preview and saves them; returns the auto zoom segments.
-/// `seq` increases with every call; a call that arrives after a newer one is
-/// ignored and returns `None`.
+/// Applies edits to the preview, leaving out the annotation `hidden`, and saves them;
+/// returns the auto zoom segments and the annotations whose image is missing. `seq`
+/// increases with every call; a call that arrives after a newer one is ignored and
+/// returns `None`.
 #[tauri::command]
 #[specta::specta]
 pub async fn editor_set_settings(
     window: WebviewWindow,
     editors: State<'_, Editors>,
     settings: EditSettings,
+    hidden: Option<String>,
     seq: u32,
-) -> Result<Option<Vec<ZoomSegment>>, String> {
-    Ok(editors.session(window.label())?.set_settings(settings, seq))
+) -> Result<Option<SettingsApplied>, String> {
+    Ok(editors
+        .session(window.label())?
+        .set_settings(settings, hidden, seq))
+}
+
+/// Splits a raster message: a little-endian u32 length, the JSON placement of that
+/// length, then the straight RGBA pixels.
+fn raster_message(body: &[u8]) -> Result<(RasterPlacement, Vec<u8>), String> {
+    let length = body
+        .get(..4)
+        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")) as usize)
+        .ok_or("the annotation image is empty")?;
+    let json = body
+        .get(4..4 + length)
+        .ok_or("the annotation image is cut short")?;
+    let placement = serde_json::from_slice(json).map_err(|e| e.to_string())?;
+    Ok((placement, body[4 + length..].to_vec()))
+}
+
+/// Keeps an annotation image drawn by the editor; see [`raster_message`] for the body.
+#[tauri::command]
+pub async fn editor_annotation_raster(
+    window: WebviewWindow,
+    editors: State<'_, Editors>,
+    request: Request<'_>,
+) -> Result<(), String> {
+    let InvokeBody::Raw(body) = request.body() else {
+        return Err("the annotation image arrived as JSON, not raw bytes".into());
+    };
+    let (placement, rgba) = raster_message(body)?;
+    editors.session(window.label())?.add_raster(placement, rgba)
 }
 
 #[tauri::command]
@@ -401,6 +439,24 @@ pub async fn export_cancel(
     Ok(())
 }
 
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+
+    #[test]
+    fn splits_raster_messages() {
+        let json = br##"{"shape":{"kind":"highlight","rect":{"x":1,"y":2,"width":3,"height":4},"color":"#ffd60a"},"width":1,"height":1,"x":-1,"y":-1,"widthPts":5,"heightPts":6}"##;
+        let mut body = (json.len() as u32).to_le_bytes().to_vec();
+        body.extend_from_slice(json);
+        body.extend_from_slice(&[1, 2, 3, 4]);
+        let (placement, rgba) = raster_message(&body).unwrap();
+        assert_eq!(rgba, [1, 2, 3, 4]);
+        assert_eq!((placement.width_pts, placement.height_pts), (5.0, 6.0));
+        assert!(raster_message(&body[..3]).is_err());
+        assert!(raster_message(&body[..10]).is_err());
+    }
+}
+
 #[cfg(all(test, feature = "synthetic"))]
 mod tests {
     use super::*;
@@ -423,7 +479,7 @@ mod tests {
         );
         let mut settings = session.settings();
         settings.cursor.size = 3.5;
-        session.set_settings(settings, 1).unwrap();
+        session.set_settings(settings, None, 1).unwrap();
 
         editors.shutdown();
         assert!(cancel.load(Ordering::SeqCst));

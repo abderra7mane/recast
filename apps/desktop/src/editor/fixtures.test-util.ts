@@ -1,4 +1,9 @@
-import type { Segment, Settings } from "@/editor/settings";
+import type {
+  Annotation,
+  AnnotationShape,
+  Segment,
+  Settings,
+} from "@/editor/settings";
 
 export const segment = (
   startMs: number,
@@ -32,5 +37,27 @@ export function settings(): Settings {
     audio: { micVolume: 1, systemVolume: 1 },
     trim: { startMs: 0, endMs: 10_000 },
     export: { codec: "h264", resolution: "1080p", fps: "60", quality: 0.7 },
+    annotations: { tracks: 1, items: [] },
   };
 }
+
+export const box = (
+  x = 10,
+  y = 20,
+  width = 100,
+  height = 50,
+): AnnotationShape => ({
+  kind: "rect",
+  rect: { x, y, width, height },
+  color: "#ff3b30",
+  width: 3,
+  fill: false,
+});
+
+export const annotation = (
+  id: string,
+  startMs: number,
+  endMs: number,
+  track = 0,
+  shape: AnnotationShape = box(),
+): Annotation => ({ id, startMs, endMs, track, shape });

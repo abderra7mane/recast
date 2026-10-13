@@ -17,8 +17,8 @@ use recast_render::{bitmap, still::StillRenderer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{
-    AppHandle, Manager, State, WebviewWindow, Wry,
-    ipc::{Invoke, InvokeBody, Request, Response},
+    AppHandle, Manager, State, WebviewWindow,
+    ipc::{InvokeBody, Request, Response},
 };
 
 use super::{Capture, copy_png};
@@ -350,18 +350,6 @@ pub async fn markup_stage(
     markups
         .session(window.label())?
         .stage(header(&request, TOKEN_HEADER)?, image)
-}
-
-/// Routes the commands that carry raw bytes, which the typed bindings can't describe,
-/// and hands every other command to `typed`.
-pub fn with_raw_commands(
-    typed: impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static,
-) -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
-    let raw: fn(Invoke<Wry>) -> bool = tauri::generate_handler![markup_image, markup_stage];
-    move |invoke| match invoke.message.command() {
-        "markup_image" | "markup_stage" => raw(invoke),
-        _ => typed(invoke),
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
