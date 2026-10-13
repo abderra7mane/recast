@@ -147,6 +147,13 @@ async fn open_recordings_folder(settings: State<'_, SettingsStore>) -> Result<()
     Ok(())
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn open_screenshots_folder(settings: State<'_, SettingsStore>) -> Result<(), String> {
+    actions::open_folder(&settings.get().screenshots.dir());
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum AppWindow {
@@ -306,6 +313,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             discard_unfinished,
             reveal_in_finder,
             open_recordings_folder,
+            open_screenshots_folder,
             open_window,
             get_settings,
             set_screenshot_settings,

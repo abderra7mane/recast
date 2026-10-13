@@ -42,6 +42,7 @@ export const commands = {
 	discardUnfinished: (path: string) => typedError<null, string>(__TAURI_INVOKE("discard_unfinished", { path })),
 	revealInFinder: (path: string) => __TAURI_INVOKE<void>("reveal_in_finder", { path }),
 	openRecordingsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_recordings_folder")),
+	openScreenshotsFolder: () => typedError<null, string>(__TAURI_INVOKE("open_screenshots_folder")),
 	openWindow: (window: AppWindow) => typedError<null, string>(__TAURI_INVOKE("open_window", { window })),
 	getSettings: () => typedError<AppSettings, string>(__TAURI_INVOKE("get_settings")),
 	setScreenshotSettings: (screenshots: ScreenshotSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_screenshot_settings", { screenshots })),

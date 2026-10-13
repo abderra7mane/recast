@@ -16,6 +16,7 @@ const commands = vi.hoisted(() => ({
   stopRecording: vi.fn(),
   takeScreenshot: vi.fn(),
   openRecordingsFolder: vi.fn(),
+  openScreenshotsFolder: vi.fn(),
   openWindow: vi.fn(),
 }));
 const events = vi.hoisted(() => ({
@@ -73,6 +74,19 @@ describe("Library", () => {
       screen.getByRole("button", { name: "Show Shot in Finder" }),
     );
     expect(commands.revealInFinder).toHaveBeenCalledWith(path);
+  });
+
+  it("opens the recordings and screenshots folders", async () => {
+    const user = userEvent.setup();
+    render(<Library />);
+    await user.click(
+      screen.getByRole("button", { name: "Open the recordings folder" }),
+    );
+    expect(commands.openRecordingsFolder).toHaveBeenCalledOnce();
+    await user.click(
+      screen.getByRole("button", { name: "Open the screenshots folder" }),
+    );
+    expect(commands.openScreenshotsFolder).toHaveBeenCalledOnce();
   });
 
   it("says when there are no screenshots", async () => {

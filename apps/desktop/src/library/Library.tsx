@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -212,6 +213,16 @@ function RecordingsCard({ projects }: { projects: ProjectSummary[] }) {
       <CardHeader>
         <CardTitle>Recordings</CardTitle>
         <CardDescription>Newest first</CardDescription>
+        <CardAction>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Open the recordings folder"
+            onClick={() => void commands.openRecordingsFolder()}
+          >
+            <FolderOpen />
+          </Button>
+        </CardAction>
       </CardHeader>
       <CardContent className="space-y-1">
         {projects.length === 0 && (
@@ -256,6 +267,16 @@ function ScreenshotsCard({ shots }: { shots: ScreenshotSummary[] }) {
       <CardHeader>
         <CardTitle>Screenshots</CardTitle>
         <CardDescription>Newest first</CardDescription>
+        <CardAction>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label="Open the screenshots folder"
+            onClick={() => void commands.openScreenshotsFolder()}
+          >
+            <FolderOpen />
+          </Button>
+        </CardAction>
       </CardHeader>
       <CardContent className="space-y-1">
         {shots.length === 0 && (
@@ -417,24 +438,14 @@ export function Library() {
     <main className="mx-auto max-w-xl space-y-4 p-4">
       <div className="flex items-start justify-between gap-2">
         <h1 className="text-xl font-semibold">Library</h1>
-        <div className="flex items-start gap-2">
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="Open the recordings folder"
-            onClick={() => void commands.openRecordingsFolder()}
-          >
-            <FolderOpen />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="Settings"
-            onClick={() => void commands.openWindow("settings")}
-          >
-            <Settings />
-          </Button>
-        </div>
+        <Button
+          variant="outline"
+          size="icon"
+          aria-label="Settings"
+          onClick={() => void commands.openWindow("settings")}
+        >
+          <Settings />
+        </Button>
       </div>
 
       <Actions phase={phase} />
