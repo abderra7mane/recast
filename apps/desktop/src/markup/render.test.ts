@@ -6,11 +6,13 @@ import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
 
 import { fullRect } from "@/markup/crop";
+import { moveShape } from "@/markup/geometry";
 import { checkerboard, variance } from "@/markup/fixtures.test-util";
 import type { NewShape, Rect, Shape } from "@/markup/model";
 import type { Pixels } from "@/markup/obscure";
 import {
   arrowParts,
+  belowDragged,
   createRenderer,
   renderOutput,
   type Ctx,
@@ -78,6 +80,22 @@ function render(
     region,
     makeCanvas,
   );
+}
+
+function meanDiff(a: ArrayLike<number>, b: ArrayLike<number>) {
+  let total = 0;
+  for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
+  return total / a.length;
+}
+
+/** `rect` of a full `W × H` render. */
+function crop(data: Uint8ClampedArray, rect: Rect) {
+  const out = new Uint8ClampedArray(rect.width * rect.height * 4);
+  for (let y = 0; y < rect.height; y++) {
+    const start = ((rect.y + y) * W + rect.x) * 4;
+    out.set(data.slice(start, start + rect.width * 4), y * rect.width * 4);
+  }
+  return out;
 }
 
 async function decode(path: string) {
@@ -311,6 +329,97 @@ describe("export renderer", () => {
     renderer.render(preview.ctx, doc, area);
     const exported = renderOutput(renderer, doc, area, makeCanvas);
     expect(preview.ctx.getImageData(0, 0, W, H).data).toEqual(exported);
+  });
+
+  for (const kind of ["blur", "pixelate"] as const) {
+    it(`drags ${kind} close to how it renders, under the marks`, () => {
+      const { renderer } = setup();
+      const area = fullRect({ width: W, height: H });
+      const marks = withIds([...TOOLS.arrow, ...TOOLS.rect]);
+      const dragged = {
+        id: "dragged",
+        kind,
+        rect: { x: 21, y: 13, width: 230, height: 150 },
+      } as Shape;
+      const exported = renderOutput(
+        renderer,
+        { shapes: [...marks, dragged] },
+        area,
+        makeCanvas,
+      );
+      const { ctx } = makeCanvas(W, H);
+      renderer.render(ctx, { shapes: marks }, area);
+      renderer.drawDragged(ctx, { shapes: [...marks, dragged] }, dragged);
+      const preview = ctx.getImageData(0, 0, W, H).data;
+      const without = renderOutput(
+        renderer,
+        { shapes: marks },
+        area,
+        makeCanvas,
+      );
+
+      expect(meanDiff(exported, without)).toBeGreaterThan(10);
+      expect(meanDiff(preview, exported)).toBeLessThan(1.5);
+    });
+  }
+
+  it("drags a mark under the marks above it", () => {
+    const { renderer } = setup();
+    const area = fullRect({ width: W, height: H });
+    const shapes = withIds([
+      { ...TOOLS.rect[0], fill: true } as NewShape,
+      ...TOOLS.highlight,
+      ...TOOLS.text,
+      ...TOOLS.blur,
+    ]);
+    const moved = moveShape(shapes[0], 30, 10);
+    const exported = renderOutput(
+      renderer,
+      { shapes: [moved, ...shapes.slice(1)] },
+      area,
+      makeCanvas,
+    );
+    const { ctx } = makeCanvas(W, H);
+    renderer.render(ctx, { shapes: belowDragged(shapes, moved) }, area);
+    renderer.drawDragged(ctx, { shapes }, moved);
+    expect(ctx.getImageData(0, 0, W, H).data).toEqual(exported);
+  });
+
+  it("drags blur under a later pixelate", () => {
+    const { renderer } = setup();
+    const area = fullRect({ width: W, height: H });
+    const pixelate = { x: 100, y: 60, width: 120, height: 90 };
+    const shapes = withIds([
+      { kind: "blur", rect: { x: 20, y: 20, width: 150, height: 100 } },
+      { kind: "pixelate", rect: pixelate },
+      ...TOOLS.arrow,
+    ]);
+    const moved = moveShape(shapes[0], 12, 8);
+    const exported = renderOutput(
+      renderer,
+      { shapes: [moved, ...shapes.slice(1)] },
+      area,
+      makeCanvas,
+    );
+    const { ctx } = makeCanvas(W, H);
+    renderer.render(ctx, { shapes: belowDragged(shapes, moved) }, area);
+    renderer.drawDragged(ctx, { shapes }, moved);
+    const blurOnTop = renderOutput(
+      renderer,
+      { shapes: [shapes[1], moved, shapes[2]] },
+      area,
+      makeCanvas,
+    );
+    const overlap = { x: 100, y: 60, width: 82, height: 68 };
+    const shown = ctx.getImageData(
+      overlap.x,
+      overlap.y,
+      overlap.width,
+      overlap.height,
+    ).data;
+    const want = crop(exported, overlap);
+    expect(meanDiff(crop(blurOnTop, overlap), want)).toBeGreaterThan(5);
+    expect(meanDiff(shown, want)).toBeLessThan(0.5);
   });
 
   it("leaves out the text being typed", () => {

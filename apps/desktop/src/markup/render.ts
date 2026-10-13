@@ -10,7 +10,13 @@ import type {
   TextShape,
 } from "@/markup/model";
 import { isObscure } from "@/markup/model";
-import { blockSize, obscure, pixelRect, type Pixels } from "@/markup/obscure";
+import {
+  blockSize,
+  obscure,
+  pixelRect,
+  shrink,
+  type Pixels,
+} from "@/markup/obscure";
 
 export type Ctx = CanvasRenderingContext2D;
 export type Surface = { canvas: CanvasImageSource; ctx: Ctx };
@@ -180,6 +186,13 @@ export type Renderer = {
     area: Rect,
     hidden?: string | null,
   ) => void;
+  /**
+   * Draws `shape`, which replaces its namesake in `doc` or goes on top, over a render of
+   * `belowDragged(doc.shapes, shape)`, fast enough for each frame of a drag. What lands
+   * above it is drawn too. Blur and pixelate are worked out from a smaller copy of the
+   * screenshot.
+   */
+  drawDragged: (ctx: Ctx, doc: Pick<Doc, "shapes">, shape: Shape) => void;
 };
 
 /**
@@ -207,6 +220,53 @@ export function createRenderer(
       patches.set(key, surface);
     }
     return { key, surface };
+  };
+
+  const factor = [4, 3, 2].find((f) => block % f === 0) ?? 1;
+  let small: Pixels | null = null;
+  let scratch: (Surface & Size) | null = null;
+  const drawObscured = (ctx: Ctx, shape: ObscureShape) => {
+    const rect = pixelRect(shape.rect, pixels);
+    if (rect.width === 0 || rect.height === 0) return;
+    small ??= shrink(pixels, factor);
+    const area = pixelRect(
+      {
+        x: rect.x / factor,
+        y: rect.y / factor,
+        width: rect.width / factor,
+        height: rect.height / factor,
+      },
+      small,
+    );
+    if (
+      !scratch ||
+      scratch.width < area.width ||
+      scratch.height < area.height
+    ) {
+      const width = Math.max(area.width, scratch?.width ?? 0);
+      const height = Math.max(area.height, scratch?.height ?? 0);
+      scratch = { ...makeCanvas(width, height), width, height };
+    }
+    const image = scratch.ctx.createImageData(area.width, area.height);
+    image.data.set(obscure(small, area, shape.kind, block / factor));
+    scratch.ctx.putImageData(image, 0, 0);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rect.x, rect.y, rect.width, rect.height);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = shape.kind === "blur";
+    ctx.drawImage(
+      scratch.canvas,
+      0,
+      0,
+      area.width,
+      area.height,
+      area.x * factor,
+      area.y * factor,
+      area.width * factor,
+      area.height * factor,
+    );
+    ctx.restore();
   };
 
   return {
@@ -239,7 +299,49 @@ export function createRenderer(
       }
       ctx.restore();
     },
+    drawDragged(ctx, doc, shape) {
+      const index = doc.shapes.findIndex((s) => s.id === shape.id);
+      const later = index < 0 ? [] : doc.shapes.slice(index + 1);
+      if (!isObscure(shape)) {
+        drawShape(ctx, shape, scale);
+        for (const mark of later) {
+          if (!isObscure(mark)) drawShape(ctx, mark, scale);
+        }
+        return;
+      }
+      drawObscured(ctx, shape);
+      // What lands above it is also in the render below, so it is redrawn only over it.
+      const { x, y, width, height } = pixelRect(shape.rect, pixels);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, width, height);
+      ctx.clip();
+      for (const above of later) {
+        if (!isObscure(above)) continue;
+        const rect = pixelRect(above.rect, pixels);
+        if (rect.width === 0 || rect.height === 0) continue;
+        ctx.drawImage(patch(above, rect).surface.canvas, rect.x, rect.y);
+      }
+      for (const mark of doc.shapes) {
+        if (!isObscure(mark) && mark.id !== shape.id) {
+          drawShape(ctx, mark, scale);
+        }
+      }
+      ctx.restore();
+    },
   };
+}
+
+/**
+ * The shapes of the render `Renderer.drawDragged` draws `dragged` over: all but
+ * `dragged` and the marks drawn above it.
+ */
+export function belowDragged(shapes: Shape[], dragged: Shape): Shape[] {
+  const index = shapes.findIndex((s) => s.id === dragged.id);
+  if (index < 0) return shapes;
+  return shapes.filter(
+    (s, i) => i < index || (i > index && (isObscure(dragged) || isObscure(s))),
+  );
 }
 
 /** The marked-up `area` as straight RGBA, as it is exported. */

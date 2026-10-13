@@ -48,9 +48,9 @@ import type {
   Shape,
   Size,
   TextShape,
-  Tool,
 } from "@/markup/model";
 import {
+  belowDragged,
   fontFor,
   LINE_HEIGHT,
   type Renderer,
@@ -68,10 +68,11 @@ import {
   type ViewMap,
 } from "@/markup/view";
 
+/** Shape drags keep the shape here and draw it on the overlay until the drag ends. */
 type Drag =
-  | { kind: "create"; id: string; tool: Tool; from: Point }
-  | { kind: "move"; start: Shape; from: Point }
-  | { kind: "resize"; start: Shape; handle: Handle }
+  | { kind: "create"; from: Point; shape: Shape }
+  | { kind: "move"; start: Shape; from: Point; shape: Shape }
+  | { kind: "resize"; start: Shape; handle: Handle; shape: Shape }
   | { kind: "crop-move"; start: Rect; from: Point }
   | { kind: "crop-resize"; start: Rect; handle: Handle }
   | { kind: "crop-new"; from: Point };
@@ -125,6 +126,24 @@ function useFrame(
     runner,
   ]);
   return enabled ? frame : null;
+}
+
+const sameItems = (a: readonly unknown[], b: readonly unknown[]) =>
+  a.length === b.length && a.every((value, i) => value === b[i]);
+
+/** `canvas` sized to `width × height` device pixels and cleared. */
+function clearedContext(
+  canvas: HTMLCanvasElement,
+  width: number,
+  height: number,
+) {
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  return ctx;
 }
 
 /** Device pixels the frame needs, in steps so zooming doesn't ask for every size. */
@@ -201,13 +220,19 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
   const scroller = useRef<HTMLDivElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const view = useRef<HTMLCanvasElement>(null);
-  const docCanvas = useRef<{ surface: Surface; drawn: unknown[] } | null>(null);
+  const overlay = useRef<HTMLCanvasElement>(null);
+  const docCanvas = useRef<{
+    surface: Surface;
+    shapes: Shape[];
+    area: unknown[];
+  } | null>(null);
+  const shown = useRef<unknown[]>([]);
   const drag = useRef<Drag | null>(null);
+  const scheduled = useRef(0);
   const lastMap = useRef<ViewMap | null>(null);
   const zoomAnchor = useRef<Point | null>(null);
   const [viewport, setViewport] = useState<Size>({ width: 0, height: 0 });
   const [scroll, setScroll] = useState<Point>({ x: 0, y: 0 });
-  const [cursor, setCursor] = useState("default");
 
   const cropping = tool === "crop";
   const area = cropping ? fullRect(image) : cropArea(doc.crop, image);
@@ -294,34 +319,63 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
   const selectedShape = shapes.find((s) => s.id === selected) ?? null;
   const editingShape = shapes.find((s) => s.id === editing);
 
-  // Drawn as part of the render, not on an animation frame: WebKit holds back frames
-  // for windows behind others.
-  useLayoutEffect(() => {
+  const shapeDrag = () => {
+    const current = drag.current;
+    return current && "shape" in current ? current : null;
+  };
+  /** The shape drag once it changed the shape, which then leaves the picture. */
+  const dragged = () => {
+    const current = shapeDrag();
+    return current &&
+      (current.kind === "create" || current.shape !== current.start)
+      ? current
+      : null;
+  };
+
+  /** The screenshot with its marks, redrawn only when they or the view change. */
+  const paintPicture = () => {
     const canvas = view.current;
     if (!canvas || viewport.width === 0) return;
-    const drawn = [shapes, area.x, area.y, area.width, area.height, editing];
+    const current = dragged();
+    const visible = current
+      ? belowDragged(shapes, current.shape)
+      : editing
+        ? shapes.filter((s) => s.id !== editing)
+        : shapes;
+    const areaKey = [area.x, area.y, area.width, area.height];
     let target = docCanvas.current;
-    if (!target || target.drawn.some((value, i) => value !== drawn[i])) {
-      if (
-        !target ||
-        target.drawn[3] !== area.width ||
-        target.drawn[4] !== area.height
-      ) {
-        target = { surface: makeCanvas(area.width, area.height), drawn };
-      }
-      renderer.render(target.surface.ctx, { shapes }, area, editing);
-      target.drawn = drawn;
+    if (
+      !target ||
+      !sameItems(target.shapes, visible) ||
+      !sameItems(target.area, areaKey)
+    ) {
+      const surface =
+        target &&
+        target.area[2] === area.width &&
+        target.area[3] === area.height
+          ? target.surface
+          : makeCanvas(area.width, area.height);
+      renderer.render(surface.ctx, { shapes: visible }, area);
+      target = { surface, shapes: visible, area: areaKey };
       docCanvas.current = target;
     }
 
     const width = Math.round(viewport.width * pixelRatio);
     const height = Math.round(viewport.height * pixelRatio);
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
-    const ctx = canvas.getContext("2d");
+    const radius = cornerPixels(area, doc.background.cornerRadius);
+    const key = [
+      target,
+      width,
+      height,
+      ...deviceTransform(map, pixelRatio),
+      beautified,
+      beautified && frame,
+      beautified && radius,
+    ];
+    if (sameItems(shown.current, key)) return;
+    shown.current = key;
+    const ctx = clearedContext(canvas, width, height);
     if (!ctx) return;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, width, height);
     ctx.setTransform(...deviceTransform(map, pixelRatio));
     ctx.imageSmoothingEnabled = true;
     // WebKit filters large downscales properly only at "medium"; "high" aliases.
@@ -338,18 +392,44 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
       }
       ctx.save();
       ctx.beginPath();
-      ctx.roundRect(
-        area.x,
-        area.y,
-        area.width,
-        area.height,
-        cornerPixels(area, doc.background.cornerRadius),
-      );
+      ctx.roundRect(area.x, area.y, area.width, area.height, radius);
       ctx.clip();
       ctx.drawImage(target.surface.canvas, area.x, area.y);
       ctx.restore();
     } else {
       ctx.drawImage(target.surface.canvas, area.x, area.y);
+    }
+  };
+
+  /** The dragged shape, the selection and the crop, over the picture. */
+  const paintOverlay = () => {
+    const canvas = overlay.current;
+    if (!canvas || viewport.width === 0) return;
+    const ctx = clearedContext(
+      canvas,
+      Math.round(viewport.width * pixelRatio),
+      Math.round(viewport.height * pixelRatio),
+    );
+    if (!ctx) return;
+    const current = dragged();
+    if (current) {
+      ctx.save();
+      ctx.setTransform(...deviceTransform(map, pixelRatio));
+      ctx.beginPath();
+      if (beautified) {
+        ctx.roundRect(
+          area.x,
+          area.y,
+          area.width,
+          area.height,
+          cornerPixels(area, doc.background.cornerRadius),
+        );
+      } else {
+        ctx.rect(area.x, area.y, area.width, area.height);
+      }
+      ctx.clip();
+      renderer.drawDragged(ctx, { shapes }, current.shape);
+      ctx.restore();
     }
 
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
@@ -363,6 +443,7 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
       return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
     };
 
+    const outlined = shapeDrag()?.shape ?? selectedShape;
     if (cropping) {
       const crop = viewRect(doc.crop ?? fullRect(image));
       ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
@@ -384,12 +465,31 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
       ctx.lineWidth = 1.5;
       ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
       rectHandles(doc.crop ?? fullRect(image)).forEach(({ at }) => square(at));
-    } else if (selectedShape && selectedShape.id !== editing) {
-      drawSelection(ctx, selectedShape, renderer.measure, (p) =>
-        toView(map, p),
-      );
+    } else if (outlined && outlined.id !== editing) {
+      drawSelection(ctx, outlined, renderer.measure, (p) => toView(map, p));
     }
+  };
+
+  const paintLatest = useRef(paintOverlay);
+  // Drawn as part of the render, not on an animation frame: WebKit holds back frames
+  // for windows behind others.
+  useLayoutEffect(() => {
+    paintLatest.current = paintOverlay;
+    cancelAnimationFrame(scheduled.current);
+    scheduled.current = 0;
+    paintPicture();
+    paintOverlay();
   });
+  useEffect(() => () => cancelAnimationFrame(scheduled.current), []);
+
+  /** Repaints the overlay once on the next frame, however many moves come first. */
+  const requestOverlay = () => {
+    if (scheduled.current) return;
+    scheduled.current = requestAnimationFrame(() => {
+      scheduled.current = 0;
+      paintLatest.current();
+    });
+  };
 
   const local = (e: { clientX: number; clientY: number }) => {
     const rect = surface.current!.getBoundingClientRect();
@@ -440,12 +540,19 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
             ? { kind: "crop-move", start: press.start, from: p }
             : { kind: "crop-new", from: p };
     } else {
-      const handle = shapeHandle(selectedShape, p);
-      if (selectedShape && handle) {
-        store.beginGesture();
-        drag.current = { kind: "resize", start: selectedShape, handle };
+      if (store.editing) store.commitText();
+      const { doc: now, selected: selectedId } = state();
+      const selection = now.shapes.find((s) => s.id === selectedId) ?? null;
+      const handle = shapeHandle(selection, p);
+      if (selection && handle) {
+        drag.current = {
+          kind: "resize",
+          start: selection,
+          handle,
+          shape: selection,
+        };
       } else if (tool === "text") {
-        const hit = hitTest(shapes, p, tolerance, scale, renderer.measure);
+        const hit = hitTest(now.shapes, p, tolerance, scale, renderer.measure);
         if (hit?.kind === "text") {
           store.editText(hit.id);
         } else {
@@ -454,24 +561,32 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
         }
         return;
       } else if (
-        selectedShape &&
-        hits(selectedShape, p, tolerance, scale, renderer.measure)
+        selection &&
+        hits(selection, p, tolerance, scale, renderer.measure)
       ) {
-        store.beginGesture();
-        drag.current = { kind: "move", start: selectedShape, from: p };
+        drag.current = {
+          kind: "move",
+          start: selection,
+          from: p,
+          shape: selection,
+        };
       } else if (tool === "select") {
-        const hit = hitTest(shapes, p, tolerance, scale, renderer.measure);
+        const hit = hitTest(now.shapes, p, tolerance, scale, renderer.measure);
         store.select(hit?.id ?? null);
         if (!hit) return;
-        store.beginGesture();
-        drag.current = { kind: "move", start: hit, from: p };
+        drag.current = { kind: "move", start: hit, from: p, shape: hit };
       } else {
         const shape = newShape(tool, p, store.style);
         if (!shape) return;
         store.select(null);
-        store.beginGesture();
-        drag.current = { kind: "create", id: store.add(shape), tool, from: p };
+        drag.current = {
+          kind: "create",
+          from: p,
+          shape: { ...shape, id: "" } as Shape,
+        };
       }
+      paintPicture();
+      paintOverlay();
     }
     e.currentTarget.setPointerCapture(e.pointerId);
   };
@@ -480,35 +595,37 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
     const p = toImage(map, local(e));
     const current = drag.current;
     if (!current) {
-      setCursor(hoverCursor(p));
+      e.currentTarget.style.cursor = hoverCursor(p);
       return;
     }
     const store = state();
     switch (current.kind) {
       case "create": {
-        const shape = store.doc.shapes.find((s) => s.id === current.id);
-        if (!shape) return;
-        const to = drawPoint(shape.kind, current.from, p, e.shiftKey);
-        store.replace(drawnTo(shape, current.from, to));
+        const to = drawPoint(current.shape.kind, current.from, p, e.shiftKey);
+        current.shape = drawnTo(current.shape, current.from, to);
+        requestOverlay();
         break;
       }
-      case "move": {
-        const delta = { x: p.x - current.from.x, y: p.y - current.from.y };
-        const d = e.shiftKey ? constrainAxis(delta) : delta;
-        store.replace(moveShape(current.start, d.x, d.y));
-        break;
-      }
-      case "resize":
-        store.replace(
-          resizeShape(
+      case "move":
+      case "resize": {
+        const first = current.shape === current.start;
+        if (current.kind === "move") {
+          const delta = { x: p.x - current.from.x, y: p.y - current.from.y };
+          const d = e.shiftKey ? constrainAxis(delta) : delta;
+          current.shape = moveShape(current.start, d.x, d.y);
+        } else {
+          current.shape = resizeShape(
             current.start,
             current.handle,
             p,
             e.shiftKey,
             renderer.measure,
-          ),
-        );
+          );
+        }
+        if (first) paintPicture();
+        requestOverlay();
         break;
+      }
       case "crop-move":
         store.setCrop(
           moveCrop(
@@ -540,12 +657,21 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
     const store = state();
+    const before = store.doc;
     if (current.kind === "create") {
-      const shape = store.doc.shapes.find((s) => s.id === current.id);
-      if (shape && tooSmall(shape, MIN_DRAWN / zoom)) store.remove(shape.id);
+      if (!tooSmall(current.shape, MIN_DRAWN / zoom)) store.add(current.shape);
+    } else if (current.kind === "move" || current.kind === "resize") {
+      const { shape } = current;
+      const kept = store.doc.shapes.some((s) => s.id === shape.id);
+      if (kept && shape !== current.start) store.replace(shape);
+    } else {
+      store.endGesture();
     }
-    store.endGesture();
-    setCursor(hoverCursor(toImage(map, local(e))));
+    if (state().doc === before) {
+      paintPicture();
+      paintOverlay();
+    }
+    e.currentTarget.style.cursor = hoverCursor(toImage(map, local(e)));
   };
 
   const onDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
@@ -575,7 +701,7 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
         <div
           ref={surface}
           className="sticky top-0 left-0 touch-none overflow-hidden"
-          style={{ width: viewport.width, height: viewport.height, cursor }}
+          style={{ width: viewport.width, height: viewport.height }}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -586,6 +712,12 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
             ref={view}
             aria-label="Screenshot"
             className="absolute inset-0"
+            style={{ width: viewport.width, height: viewport.height }}
+          />
+          <canvas
+            ref={overlay}
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
             style={{ width: viewport.width, height: viewport.height }}
           />
           {editingShape?.kind === "text" && (

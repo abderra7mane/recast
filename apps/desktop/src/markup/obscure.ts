@@ -93,6 +93,19 @@ function smooth(values: Float64Array, columns: number, rows: number) {
   return pass(pass(values, 1, 0), 0, 1);
 }
 
+/** `source` scaled down by `factor`, each pixel the average of a square of it. */
+export function shrink(source: Pixels, factor: number): Pixels {
+  const width = Math.ceil(source.width / factor);
+  const height = Math.ceil(source.height / factor);
+  const area = { x: 0, y: 0, width: source.width, height: source.height };
+  const { values } = cells(source, area, factor);
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < data.length; i += 4) {
+    writePixel(data, i, values[i], values[i + 1], values[i + 2], values[i + 3]);
+  }
+  return { width, height, data };
+}
+
 /** The two cells around pixel `position` and the weight of the second. */
 function along(position: number, count: number, block: number) {
   const g = Math.min(Math.max((position + 0.5) / block - 0.5, 0), count - 1);

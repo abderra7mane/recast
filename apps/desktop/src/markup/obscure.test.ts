@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { checkerboard, variance } from "@/markup/fixtures.test-util";
-import { blockSize, obscure, pixelRect } from "@/markup/obscure";
+import { blockSize, obscure, pixelRect, shrink } from "@/markup/obscure";
 
 describe("obscure", () => {
   it("scales its blocks with the screenshot", () => {
@@ -83,5 +83,14 @@ describe("obscure", () => {
       2,
     );
     expect([...out.slice(0, 4)]).toEqual([255, 0, 0, 128]);
+  });
+
+  it("shrinks by averaging squares, keeping the edge remainder", () => {
+    const small = shrink(checkerboard(10, 6), 4);
+    expect(small.width).toBe(3);
+    expect(small.height).toBe(2);
+    expect([...small.data.slice(0, 4)]).toEqual([128, 128, 128, 255]);
+    // The last column averages a 2 × 4 strip.
+    expect([...small.data.slice(8, 12)]).toEqual([128, 128, 128, 255]);
   });
 });
