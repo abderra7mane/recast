@@ -46,6 +46,20 @@ export const commands = {
 	 *  changes nothing; a shortcut macOS refuses is kept and reported in its status.
 	 */
 	setShortcut: (action: ShortcutAction, shortcut: string | null) => typedError<ShortcutStatus[], string>(__TAURI_INVOKE("set_shortcut", { action, shortcut })),
+	/**
+	 *  Changes the appearance and restyles every open window. A sync command, so changes
+	 *  apply in the order they were sent.
+	 */
+	setAppearance: (appearance: AppearanceSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_appearance", { appearance })),
+	/**
+	 *  Replaces the resolved theme, if the appearance is still `seen`; a window resolving
+	 *  the saved choice again never overwrites a newer choice.
+	 */
+	refreshAppliedTheme: (seen: AppearanceSettings, applied: AppliedTheme) => typedError<boolean, string>(__TAURI_INVOKE("refresh_applied_theme", { seen, applied })),
+	/**  Writes a theme file the webview made. */
+	exportTheme: (path: string, contents: string) => typedError<null, string>(__TAURI_INVOKE("export_theme", { path, contents })),
+	/**  Reads a theme file for the webview to check and import. */
+	importTheme: (path: string) => typedError<string, string>(__TAURI_INVOKE("import_theme", { path })),
 	shortcutStatuses: () => __TAURI_INVOKE<ShortcutStatus[]>("shortcut_statuses"),
 	/**  Turns the global shortcuts off while the Settings window records a new one. */
 	suspendShortcuts: (suspended: boolean) => __TAURI_INVOKE<ShortcutStatus[]>("suspend_shortcuts", { suspended }),
@@ -119,6 +133,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	appearanceChanged: makeEvent<AppearanceChanged>("appearance-changed"),
 	exportFinished: makeEvent<ExportFinished>("export-finished"),
 	exportProgress: makeEvent<ExportProgress>("export-progress"),
 	recordingChanged: makeEvent<RecordingChanged>("recording-changed"),
@@ -167,10 +182,38 @@ export type AppSettings = {
 	recording?: RecordingSettings,
 	shortcuts?: ShortcutSettings,
 	updates?: UpdateSettings,
+	appearance?: AppearanceSettings,
 	onboardingCompleted?: boolean,
 };
 
 export type AppWindow = "library" | "settings" | "onboarding";
+
+export type AppearanceChanged = {
+	applied: AppliedTheme | null,
+	/**  The window that made the change. */
+	source: string,
+};
+
+export type AppearanceSettings = {
+	/**  `system`, or the id of a built-in or custom theme. */
+	theme?: string,
+	/**  The themes `system` uses in light and dark mode. */
+	systemLight?: string,
+	systemDark?: string,
+	customThemes?: CustomTheme[],
+	/**
+	 *  The chosen theme as resolved by the webview. `None` leaves the stylesheet's
+	 *  defaults, which are Recast Dark.
+	 */
+	applied?: AppliedTheme | null,
+};
+
+/**  The styles windows apply: `dark` alone, or `light` and `dark` following macOS. */
+export type AppliedTheme = {
+	followSystem: boolean,
+	light: ThemeStyle,
+	dark: ThemeStyle,
+};
 
 /**  Gains from 0 (muted) to 2. */
 export type AudioMix = {
@@ -225,6 +268,17 @@ export type CursorSettings = {
 	/**  0 follows the recorded path exactly; 1 is the smoothest. */
 	smoothing?: number | null,
 	hideWhenIdle?: boolean,
+};
+
+/**  A theme the user made or imported. */
+export type CustomTheme = {
+	id: string,
+	name: string,
+	base: ThemeBase,
+	/**  The built-in theme it was copied from; resetting a color goes back to its value. */
+	basedOn?: string | null,
+	/**  Token name to `#rrggbb` or `#rrggbbaa`. */
+	colors: { [key in string]: string },
 };
 
 /**
@@ -497,6 +551,15 @@ export type SoundSettings = {
 	volume?: number | null,
 	/**  Right clicks use the pack's own right-button sounds instead of the left ones. */
 	separateLeftRight?: boolean,
+};
+
+export type ThemeBase = "light" | "dark";
+
+/**  A theme as CSS custom properties. */
+export type ThemeStyle = {
+	base: ThemeBase,
+	/**  `--t-*` property to `#rrggbb` or `#rrggbbaa`. */
+	vars: { [key in string]: string },
 };
 
 /**  Milliseconds on the recording's timeline; no `end_ms` means the end of the recording. */

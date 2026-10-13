@@ -1,6 +1,7 @@
 mod actions;
 pub mod activation;
 mod alert;
+pub mod appearance;
 mod appkit;
 mod crash;
 pub mod diagnostics;
@@ -286,7 +287,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             ExportFinished,
             RecordingChanged,
             updates::UpdateProgress,
-            updates::UpdateStatusChanged
+            updates::UpdateStatusChanged,
+            appearance::AppearanceChanged
         ])
         .commands(collect_commands![
             check_permissions,
@@ -309,6 +311,10 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             set_recording_settings,
             set_update_settings,
             set_shortcut,
+            appearance::set_appearance,
+            appearance::refresh_applied_theme,
+            appearance::export_theme,
+            appearance::import_theme,
             shortcut_statuses,
             suspend_shortcuts,
             login_item::get_launch_at_login,
@@ -450,6 +456,10 @@ pub fn run() {
         .manage(updates::Pending::default())
         .invoke_handler(with_raw_commands(builder.invoke_handler()))
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::ThemeChanged(_) = event {
+                let settings = window.app_handle().state::<SettingsStore>().get();
+                appearance::apply_to_window(window, settings.appearance.applied.as_ref());
+            }
             if let tauri::WindowEvent::Destroyed = event {
                 activation::window_destroyed(window.app_handle(), window.label());
                 if window.label() == windows::SETTINGS {
@@ -474,6 +484,9 @@ pub fn run() {
             } => windows::show_or_log(app, windows::LIBRARY),
             // Quitting does not destroy windows first, so sessions are saved here.
             tauri::RunEvent::Exit => {
+                if let Err(e) = app.state::<SettingsStore>().save() {
+                    log::warn!("{e}");
+                }
                 recording_ui::save_on_quit(app);
                 app.state::<Editors>().shutdown();
             }

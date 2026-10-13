@@ -31,7 +31,7 @@ function PermissionRow({
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           {granted ? (
-            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-green-600" />
+            <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-success" />
           ) : (
             <Circle className="text-muted-foreground mt-0.5 size-5 shrink-0" />
           )}
@@ -59,7 +59,7 @@ function PermissionRow({
         </div>
       </div>
       {state && !granted && info.need !== "optional" && (
-        <p className="flex items-start gap-1.5 pl-8 text-xs text-amber-600">
+        <p className="flex items-start gap-1.5 pl-8 text-xs text-warning">
           <TriangleAlert className="mt-px size-3.5 shrink-0" />
           {info.without}
         </p>

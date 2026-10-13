@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AppearanceSettings } from "@/settings/Appearance";
 import {
   DEFAULT_RECORDINGS_FOLDER,
   DEFAULT_SCREENSHOTS_FOLDER,
@@ -207,6 +208,7 @@ export function Settings() {
       <Tabs defaultValue="general">
         <TabsList className="w-full">
           <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>
           <TabsTrigger value="recording">Recording</TabsTrigger>
           <TabsTrigger value="screenshots">Screenshots</TabsTrigger>
@@ -223,7 +225,7 @@ export function Settings() {
             onChange={(enabled) => void changeLoginItem(enabled)}
           />
           {loginItem === "needsApproval" && (
-            <div className="flex items-center justify-between gap-2 text-xs text-amber-600">
+            <div className="flex items-center justify-between gap-2 text-xs text-warning">
               <span>Allow Recast in System Settings → Login Items.</span>
               <Button
                 size="xs"
@@ -250,6 +252,15 @@ export function Settings() {
               Show Onboarding
             </Button>
           </div>
+        </TabsContent>
+
+        <TabsContent value="appearance" className="pt-2">
+          <AppearanceSettings
+            appearance={settings.appearance}
+            onChange={(appearance) =>
+              setSettings((current) => current && { ...current, appearance })
+            }
+          />
         </TabsContent>
 
         <TabsContent value="shortcuts" className="space-y-4 pt-2">

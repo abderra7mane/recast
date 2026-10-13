@@ -61,10 +61,10 @@ function Playhead({ scale }: { scale: number }) {
   const timeMs = usePlayback((s) => s.timeMs);
   return (
     <div
-      className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-red-500"
+      className="bg-playhead pointer-events-none absolute top-0 bottom-0 z-20 w-px"
       style={{ left: GUTTER + timeToPx(timeMs, scale) }}
     >
-      <div className="absolute -top-0.5 -left-[5px] size-[11px] rounded-full bg-red-500" />
+      <div className="bg-playhead absolute -top-0.5 -left-[5px] size-[11px] rounded-full" />
     </div>
   );
 }
@@ -358,17 +358,17 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
             onPointerDown={(e) => start(e, { kind: "seek" })}
           >
             <div
-              className="absolute inset-y-0 rounded-md bg-sky-900/40 ring-1 ring-sky-500/30"
+              className="bg-tl-recording ring-tl-recording-border absolute inset-y-0 rounded-md ring-1"
               style={{ left: x(0), width: timeToPx(durationMs, scale) }}
             />
             <div
-              className="absolute inset-y-0 rounded-md bg-sky-600/50 ring-1 ring-sky-400/70"
+              className="bg-tl-clip ring-tl-clip-border absolute inset-y-0 rounded-md ring-1"
               style={{
                 left: x(trimStart),
                 width: timeToPx(trimEnd - trimStart, scale),
               }}
             >
-              <span className="absolute top-1 left-3 text-[11px] font-medium text-sky-50/90">
+              <span className="text-tl-clip-foreground absolute top-1 left-3 text-[11px] font-medium">
                 Clip · {formatTime(trimEnd - trimStart)}
               </span>
             </div>
@@ -378,7 +378,7 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
                 title={`${c.button} click at ${formatTime(c.tMs ?? 0)}`}
                 className={cn(
                   "pointer-events-none absolute bottom-1 h-3 w-0.5 rounded-full",
-                  c.button === "left" ? "bg-amber-300" : "bg-fuchsia-300",
+                  c.button === "left" ? "bg-tl-click" : "bg-tl-click-alt",
                 )}
                 style={{ left: x(c.tMs ?? 0) }}
               />
@@ -390,7 +390,7 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
                 aria-label={`Trim ${edge}`}
                 title={`Drag to trim the ${edge}`}
                 aria-valuenow={edge === "start" ? trimStart : trimEnd}
-                className="absolute inset-y-0 z-10 w-2.5 cursor-ew-resize rounded-sm bg-sky-300 hover:bg-white"
+                className="bg-tl-trim hover:bg-tl-selected absolute inset-y-0 z-10 w-2.5 cursor-ew-resize rounded-sm"
                 style={{
                   left:
                     x(edge === "start" ? trimStart : trimEnd) -
@@ -413,7 +413,7 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
             }}
           >
             <div
-              className="pointer-events-none absolute inset-y-0 rounded-md bg-white/[0.03]"
+              className="bg-tl-lane pointer-events-none absolute inset-y-0 rounded-md"
               style={{ left: x(0), width: timeToPx(durationMs, scale) }}
             />
             {segments.map((s, index) => (
@@ -422,9 +422,9 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
                 className={cn(
                   "absolute inset-y-0 flex cursor-grab items-center justify-center overflow-hidden rounded-md text-[11px] font-medium active:cursor-grabbing",
                   auto
-                    ? "bg-violet-500/30 text-violet-100 ring-1 ring-violet-400/40"
-                    : "bg-violet-500/60 text-white ring-1 ring-violet-300/60",
-                  selected === index && "ring-2 ring-white",
+                    ? "bg-tl-zoom-auto text-tl-zoom-auto-foreground ring-tl-zoom-auto-border ring-1"
+                    : "bg-tl-zoom text-tl-zoom-foreground ring-tl-zoom-border ring-1",
+                  selected === index && "ring-tl-selected ring-2",
                 )}
                 style={{
                   left: x(s.startMs),
@@ -447,7 +447,7 @@ export function Timeline({ clicks }: { clicks: ClickMarker[] }) {
                   <div
                     key={edge}
                     className={cn(
-                      "absolute inset-y-0 w-1.5 cursor-ew-resize hover:bg-white/60",
+                      "hover:bg-tl-selected/60 absolute inset-y-0 w-1.5 cursor-ew-resize",
                       edge === "start" ? "left-0" : "right-0",
                     )}
                     onPointerDown={(e) => {

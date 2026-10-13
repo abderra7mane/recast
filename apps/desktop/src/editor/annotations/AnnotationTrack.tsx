@@ -60,7 +60,7 @@ export const AnnotationTrack = memo(function AnnotationTrack({
       }}
     >
       <div
-        className="pointer-events-none absolute inset-y-0 rounded-md bg-white/[0.03]"
+        className="bg-tl-lane pointer-events-none absolute inset-y-0 rounded-md"
         style={{ left: x(0), width: timeToPx(durationMs, scale) }}
       />
       <span className="text-muted-foreground/60 pointer-events-none sticky left-0 inline-block py-2.5 pl-5 text-[10px]">
@@ -72,11 +72,11 @@ export const AnnotationTrack = memo(function AnnotationTrack({
           data-annotation={a.id}
           title={annotationName(a)}
           className={cn(
-            "absolute inset-y-0 flex cursor-grab items-center overflow-hidden rounded-md text-[11px] font-medium text-white active:cursor-grabbing",
+            "text-tl-segment-foreground absolute inset-y-0 flex cursor-grab items-center overflow-hidden rounded-md text-[11px] font-medium active:cursor-grabbing",
             isObscure(a.shape)
-              ? "bg-slate-400/40 ring-1 ring-slate-300/50"
-              : "bg-amber-500/55 ring-1 ring-amber-300/60",
-            selected === a.id && "ring-2 ring-white",
+              ? "bg-tl-obscure ring-tl-obscure-border ring-1"
+              : "bg-tl-annotation ring-tl-annotation-border ring-1",
+            selected === a.id && "ring-tl-selected ring-2",
           )}
           style={{
             left: x(a.startMs),
@@ -98,7 +98,7 @@ export const AnnotationTrack = memo(function AnnotationTrack({
             <div
               key={edge}
               className={cn(
-                "absolute inset-y-0 w-1.5 cursor-ew-resize hover:bg-white/60",
+                "hover:bg-tl-selected/60 absolute inset-y-0 w-1.5 cursor-ew-resize",
                 edge === "start" ? "left-0" : "right-0",
               )}
               onPointerDown={(e) => {

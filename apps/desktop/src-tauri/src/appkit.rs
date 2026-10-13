@@ -6,11 +6,14 @@ use objc2::{
     runtime::AnyObject,
 };
 use objc2_app_kit::{
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
     NSBezierPath, NSBitmapImageRep, NSColor, NSDeviceRGBColorSpace, NSFont, NSFontAttributeName,
     NSFontWeightSemibold, NSForegroundColorAttributeName, NSImage, NSPanel, NSResponder, NSScreen,
     NSStringDrawing, NSWindow,
 };
-use objc2_foundation::{NSDictionary, NSNumber, NSObject, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSArray, NSDictionary, NSNumber, NSObject, NSPoint, NSRect, NSSize, NSString,
+};
 use recast_project::Rect;
 
 define_class!(
@@ -220,6 +223,30 @@ pub fn release_later<T: 'static>(value: T, mtm: MainThreadMarker) {
         let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
         drop(bound.into_inner(mtm));
     });
+}
+
+/// Gives `window` the dark or light appearance, or the system's with `None`.
+pub fn set_dark_appearance(window: &NSWindow, dark: Option<bool>) {
+    // SAFETY: the appearance names are constant strings exported by AppKit.
+    let appearance = dark.and_then(|dark| {
+        NSAppearance::appearanceNamed(unsafe {
+            if dark {
+                NSAppearanceNameDarkAqua
+            } else {
+                NSAppearanceNameAqua
+            }
+        })
+    });
+    window.setAppearance(appearance.as_deref());
+}
+
+pub fn is_dark(window: &NSWindow) -> bool {
+    // SAFETY: as above.
+    let (aqua, dark) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
+    window
+        .effectiveAppearance()
+        .bestMatchFromAppearancesWithNames(&NSArray::from_slice(&[aqua, dark]))
+        .is_some_and(|name| &*name == dark)
 }
 
 /// Hides Recast's own overlays from screen capture. QA builds with the `synthetic`

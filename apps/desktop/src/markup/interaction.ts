@@ -2,13 +2,13 @@ import { bounds, handles, rectFrom, type Handle } from "@/markup/geometry";
 import type { TextMeasure } from "@/markup/geometry";
 import type { NewShape, Point, Rect, Shape, Style, Tool } from "@/markup/model";
 import type { Ctx } from "@/markup/render";
+import { themeColor } from "@/theme/apply";
 
 /** Handle squares and how close the pointer must be to grab them, in CSS pixels. */
 export const HANDLE_SIZE = 8;
 export const GRAB = 7;
 /** Shapes drawn smaller than this, in CSS pixels, are dropped. */
 export const MIN_DRAWN = 3;
-const ACCENT = "#0a84ff";
 
 export const RESIZE_CURSORS: Record<Handle, string> = {
   nw: "nwse-resize",
@@ -86,8 +86,8 @@ export function tooSmall(shape: Shape | NewShape, minimum: number) {
 /** A handle square at `at`, in the context's current units. */
 export function drawHandle(ctx: Ctx, at: Point) {
   const half = HANDLE_SIZE / 2;
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = ACCENT;
+  ctx.fillStyle = themeColor("accentForeground");
+  ctx.strokeStyle = themeColor("accent");
   ctx.lineWidth = 1.5;
   ctx.fillRect(at.x - half, at.y - half, HANDLE_SIZE, HANDLE_SIZE);
   ctx.strokeRect(at.x - half, at.y - half, HANDLE_SIZE, HANDLE_SIZE);
@@ -108,7 +108,7 @@ export function drawSelection(
     const a = toView(box);
     const b = toView({ x: box.x + box.width, y: box.y + box.height });
     ctx.setLineDash([4, 3]);
-    ctx.strokeStyle = ACCENT;
+    ctx.strokeStyle = themeColor("accent");
     ctx.lineWidth = 1;
     ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
     ctx.setLineDash([]);

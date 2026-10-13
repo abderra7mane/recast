@@ -2,12 +2,17 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use recast_project::BackgroundSettings;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+
+use crate::appearance::AppearanceSettings;
 
 pub const FILE_NAME: &str = "settings.json";
 
@@ -184,6 +189,7 @@ pub struct AppSettings {
     pub recording: RecordingSettings,
     pub shortcuts: ShortcutSettings,
     pub updates: UpdateSettings,
+    pub appearance: AppearanceSettings,
     pub onboarding_completed: bool,
 }
 
@@ -196,6 +202,7 @@ impl Default for AppSettings {
             recording: RecordingSettings::default(),
             shortcuts: ShortcutSettings::default(),
             updates: UpdateSettings::default(),
+            appearance: AppearanceSettings::default(),
             onboarding_completed: false,
         }
     }
@@ -204,6 +211,8 @@ impl Default for AppSettings {
 pub struct SettingsStore {
     path: PathBuf,
     current: Mutex<AppSettings>,
+    /// Set by `update_unsaved` until the next write.
+    unsaved: AtomicBool,
 }
 
 impl SettingsStore {
@@ -221,6 +230,7 @@ impl SettingsStore {
         Self {
             path: path.to_path_buf(),
             current: Mutex::new(current),
+            unsaved: AtomicBool::new(false),
         }
     }
 
@@ -233,15 +243,45 @@ impl SettingsStore {
         let mut current = self.current.lock().map_err(|e| e.to_string())?;
         let mut next = current.clone();
         change(&mut next);
-        if next != *current {
-            write_atomically(
-                &self.path,
-                &serde_json::to_vec_pretty(&next).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| format!("cannot save {}: {e}", self.path.display()))?;
+        if next != *current || self.unsaved.load(Ordering::SeqCst) {
+            self.write(&next)?;
             *current = next;
         }
         Ok(current.clone())
+    }
+
+    /// Changes the settings in memory only, for changes that come many times a second;
+    /// `save` writes them.
+    pub fn update_unsaved(
+        &self,
+        change: impl FnOnce(&mut AppSettings),
+    ) -> Result<AppSettings, String> {
+        let mut current = self.current.lock().map_err(|e| e.to_string())?;
+        let before = current.clone();
+        change(&mut current);
+        if *current != before {
+            self.unsaved.store(true, Ordering::SeqCst);
+        }
+        Ok(current.clone())
+    }
+
+    /// Writes changes made by `update_unsaved`, if any.
+    pub fn save(&self) -> Result<(), String> {
+        let current = self.current.lock().map_err(|e| e.to_string())?;
+        if self.unsaved.load(Ordering::SeqCst) {
+            self.write(&current)?;
+        }
+        Ok(())
+    }
+
+    fn write(&self, settings: &AppSettings) -> Result<(), String> {
+        write_atomically(
+            &self.path,
+            &serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| format!("cannot save {}: {e}", self.path.display()))?;
+        self.unsaved.store(false, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -527,6 +567,32 @@ mod tests {
             ..Default::default()
         };
         assert!(blank.dir().ends_with("Movies/Recast"));
+    }
+
+    #[test]
+    fn unsaved_changes_are_written_by_save_or_the_next_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let store = SettingsStore::load(&path);
+        store
+            .update_unsaved(|s| s.appearance.theme = "nord".into())
+            .unwrap();
+        assert_eq!(store.get().appearance.theme, "nord");
+        assert!(!path.exists());
+        store.save().unwrap();
+        assert_eq!(SettingsStore::load(&path).get().appearance.theme, "nord");
+
+        store
+            .update_unsaved(|s| s.appearance.theme = "dracula".into())
+            .unwrap();
+        store.update(|s| s.onboarding_completed = true).unwrap();
+        let reloaded = SettingsStore::load(&path).get();
+        assert_eq!(reloaded.appearance.theme, "dracula");
+        assert!(reloaded.onboarding_completed);
+
+        std::fs::remove_file(&path).unwrap();
+        store.save().unwrap();
+        assert!(!path.exists(), "nothing left to save");
     }
 
     #[test]

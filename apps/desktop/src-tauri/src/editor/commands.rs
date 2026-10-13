@@ -134,7 +134,6 @@ pub fn open_editor_window(app: &AppHandle, path: &Path) -> Result<(), String> {
             .title(title)
             .inner_size(1440.0, 900.0)
             .min_inner_size(1040.0, 660.0)
-            .theme(Some(tauri::Theme::Dark))
     })?;
     let app = app.clone();
     window.on_window_event(move |event| {

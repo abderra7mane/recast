@@ -166,7 +166,7 @@ function View({ status }: { status: UpdateStatus }) {
     case "upToDate":
       return (
         <Notice
-          badge={<CircleCheck className="size-6 text-green-600" />}
+          badge={<CircleCheck className="size-6 text-success" />}
           title="You're up to date"
           actions={<Button onClick={close}>OK</Button>}
         >

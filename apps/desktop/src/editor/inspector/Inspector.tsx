@@ -527,7 +527,7 @@ function ExportTab({
         onChange={(resolution) => update("export", { resolution })}
       />
       {scale > ENLARGE_WARNING && (
-        <p role="status" className="text-xs text-amber-500">
+        <p role="status" className="text-warning text-xs">
           The recording is {video.width} × {video.height} px. {preset} enlarges
           it {scale.toFixed(1)}×, so text may look soft.
         </p>

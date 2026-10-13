@@ -58,6 +58,8 @@ import {
 } from "@/markup/render";
 import { cornerPixels, makeCanvas, paddingPixels } from "@/markup/session";
 import { markupStore, useMarkup } from "@/markup/store";
+import { onThemeChange, themeColor } from "@/theme/apply";
+import { withAlpha } from "@/theme/color";
 import {
   deviceTransform,
   fitZoom,
@@ -193,7 +195,7 @@ function TextEditor({
           commit();
         }
       }}
-      className="absolute resize-none overflow-hidden border-0 bg-transparent p-0 whitespace-pre outline-1 outline-sky-400 outline-dashed"
+      className="absolute resize-none overflow-hidden border-0 bg-transparent p-0 whitespace-pre outline-brand outline-1 outline-dashed"
       style={{
         left: at.x,
         top: at.y,
@@ -446,12 +448,12 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
     const outlined = shapeDrag()?.shape ?? selectedShape;
     if (cropping) {
       const crop = viewRect(doc.crop ?? fullRect(image));
-      ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+      ctx.fillStyle = themeColor("cropShade");
       ctx.beginPath();
       ctx.rect(0, 0, viewport.width, viewport.height);
       ctx.rect(crop.x, crop.y, crop.width, crop.height);
       ctx.fill("evenodd");
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+      ctx.strokeStyle = themeColor("cropGuide");
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (const third of [1 / 3, 2 / 3]) {
@@ -461,7 +463,7 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
         ctx.lineTo(crop.x + crop.width, crop.y + crop.height * third);
       }
       ctx.stroke();
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = withAlpha(themeColor("cropGuide"), 1);
       ctx.lineWidth = 1.5;
       ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
       rectHandles(doc.crop ?? fullRect(image)).forEach(({ at }) => square(at));
@@ -481,6 +483,7 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
     paintOverlay();
   });
   useEffect(() => () => cancelAnimationFrame(scheduled.current), []);
+  useEffect(() => onThemeChange(() => paintLatest.current()), []);
 
   /** Repaints the overlay once on the next frame, however many moves come first. */
   const requestOverlay = () => {
@@ -689,7 +692,7 @@ export function MarkupCanvas({ renderer }: { renderer: Renderer }) {
   return (
     <div
       ref={scroller}
-      className="relative min-h-0 flex-1 overflow-auto bg-black/40"
+      className="bg-stage relative min-h-0 flex-1 overflow-auto"
       onScroll={(e) =>
         setScroll({
           x: e.currentTarget.scrollLeft,

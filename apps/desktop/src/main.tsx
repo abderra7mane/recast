@@ -8,6 +8,7 @@ import { forwardToLogFile } from "@/logging";
 import { Markup } from "@/markup/Markup";
 import { Onboarding } from "@/onboarding/Onboarding";
 import { Settings } from "@/settings/Settings";
+import { startTheme } from "@/theme/apply";
 import { Update } from "@/update/Update";
 
 import "@/styles/styles.css";
@@ -31,6 +32,7 @@ function view(label: string) {
 
 const label = windowLabel();
 forwardToLogFile(label || "library");
+startTheme(label);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>{view(label)}</StrictMode>,

@@ -4,37 +4,73 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.14 0 285.86);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.14 0 285.86);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.14 0 285.86);
-  --primary: oklch(0.21 0.01 285.93);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.21 0.01 285.93);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.55 0.02 285.93);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.21 0.01 285.93);
-  --destructive: oklch(0.58 0.24 28.48);
-  --border: oklch(0.92 0 286.61);
-  --input: oklch(0.92 0 286.61);
-  --ring: oklch(0.71 0.01 286.09);
-  --chart-1: oklch(0.65 0.22 36.85);
-  --chart-2: oklch(0.6 0.11 184.15);
-  --chart-3: oklch(0.4 0.07 227.18);
-  --chart-4: oklch(0.83 0.17 81.03);
-  --chart-5: oklch(0.77 0.17 65.36);
-  --sidebar: oklch(0.99 0 0);
-  --sidebar-foreground: oklch(0.14 0 285.86);
-  --sidebar-primary: oklch(0.21 0.01 285.93);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.21 0.01 285.93);
-  --sidebar-border: oklch(0.92 0 286.61);
-  --sidebar-ring: oklch(0.71 0.01 286.09);
+  /* Recast Dark. Themes set these on the root element before the first paint. */
+  --t-background: #0f0f11;
+  --t-foreground: #fafafa;
+  --t-surface: #18181b;
+  --t-muted: #27272a;
+  --t-muted-foreground: #9f9fa9;
+  --t-hover: #27272a;
+  --t-border: #ffffff1a;
+  --t-input: #ffffff26;
+  --t-stage: #00000066;
+  --t-overlay: #00000080;
+  --t-scrollbar: #ffffff4d;
+  --t-selection: #0a84ff59;
+  --t-primary: #e4e4e7;
+  --t-primary-foreground: #18181b;
+  --t-accent: #0a84ff;
+  --t-accent-foreground: #ffffff;
+  --t-ring: #71717b;
+  --t-knob: #ffffff;
+  --t-danger: #ff6467;
+  --t-danger-foreground: #ffffff;
+  --t-warning: #fe9a00;
+  --t-success: #00a63e;
+  --t-playhead: #fb2c36;
+  --t-lane: #ffffff08;
+  --t-recording: #024a7066;
+  --t-recording-border: #00a6f44d;
+  --t-clip: #0084d180;
+  --t-clip-border: #00bcffb3;
+  --t-clip-foreground: #f0f9ffe6;
+  --t-trim-handle: #74d4ff;
+  --t-click: #ffd230;
+  --t-click-alt: #f4a8ff;
+  --t-zoom: #8e51ff99;
+  --t-zoom-border: #c4b4ff99;
+  --t-zoom-foreground: #ffffff;
+  --t-zoom-auto: #8e51ff4d;
+  --t-zoom-auto-border: #a684ff66;
+  --t-zoom-auto-foreground: #ede9fe;
+  --t-annotation: #fe9a008c;
+  --t-annotation-border: #ffd23099;
+  --t-obscure: #90a1b966;
+  --t-obscure-border: #cad5e280;
+  --t-segment-foreground: #ffffff;
+  --t-segment-selected: #ffffff;
+  --t-crop-shade: #0000008c;
+  --t-crop-guide: #ffffff59;
+
+  --background: var(--t-background);
+  --foreground: var(--t-foreground);
+  --card: var(--t-surface);
+  --card-foreground: var(--t-foreground);
+  --popover: var(--t-surface);
+  --popover-foreground: var(--t-foreground);
+  --primary: var(--t-primary);
+  --primary-foreground: var(--t-primary-foreground);
+  --secondary: var(--t-muted);
+  --secondary-foreground: var(--t-foreground);
+  --muted: var(--t-muted);
+  --muted-foreground: var(--t-muted-foreground);
+  --accent: var(--t-hover);
+  --accent-foreground: var(--t-foreground);
+  --destructive: var(--t-danger);
+  --border: var(--t-border);
+  --input: var(--t-input);
+  --ring: var(--t-ring);
+  color-scheme: dark;
 
   --font-sans:
     "Geist", "Geist Fallback", ui-sans-serif, system-ui, -apple-system,
@@ -64,36 +100,6 @@
   --shadow-2xl: 0 1px 3px 0px oklch(0 0 0 / 0.25);
 }
 
-.dark {
-  --background: oklch(0.17 0.004 285.82);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.88);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.88);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.88);
-  --secondary: oklch(0.274 0.006 286.03);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.03);
-  --muted-foreground: oklch(0.705 0.015 286.07);
-  --accent: oklch(0.274 0.006 286.03);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.22);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.94);
-  --sidebar: oklch(0.21 0.006 285.88);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.38);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.03);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.94);
-  color-scheme: dark;
-}
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -113,19 +119,36 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
+  --color-brand: var(--t-accent);
+  --color-brand-foreground: var(--t-accent-foreground);
+  --color-danger-foreground: var(--t-danger-foreground);
+  --color-warning: var(--t-warning);
+  --color-success: var(--t-success);
+  --color-stage: var(--t-stage);
+  --color-overlay: var(--t-overlay);
+  --color-knob: var(--t-knob);
+  --color-playhead: var(--t-playhead);
+  --color-tl-lane: var(--t-lane);
+  --color-tl-recording: var(--t-recording);
+  --color-tl-recording-border: var(--t-recording-border);
+  --color-tl-clip: var(--t-clip);
+  --color-tl-clip-border: var(--t-clip-border);
+  --color-tl-clip-foreground: var(--t-clip-foreground);
+  --color-tl-trim: var(--t-trim-handle);
+  --color-tl-click: var(--t-click);
+  --color-tl-click-alt: var(--t-click-alt);
+  --color-tl-zoom: var(--t-zoom);
+  --color-tl-zoom-border: var(--t-zoom-border);
+  --color-tl-zoom-foreground: var(--t-zoom-foreground);
+  --color-tl-zoom-auto: var(--t-zoom-auto);
+  --color-tl-zoom-auto-border: var(--t-zoom-auto-border);
+  --color-tl-zoom-auto-foreground: var(--t-zoom-auto-foreground);
+  --color-tl-annotation: var(--t-annotation);
+  --color-tl-annotation-border: var(--t-annotation-border);
+  --color-tl-obscure: var(--t-obscure);
+  --color-tl-obscure-border: var(--t-obscure-border);
+  --color-tl-segment-foreground: var(--t-segment-foreground);
+  --color-tl-selected: var(--t-segment-selected);
 
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
@@ -157,5 +180,11 @@
   body,
   #root {
     @apply h-full;
+  }
+  html {
+    scrollbar-color: var(--t-scrollbar) transparent;
+  }
+  ::selection {
+    background-color: var(--t-selection);
   }
 }

@@ -195,7 +195,7 @@ function SavedCard({ result }: { result: FinishedRecording }) {
       {result.warnings.length > 0 && (
         <CardContent className="space-y-1">
           {result.warnings.map((warning) => (
-            <p key={warning} className="text-sm text-amber-600">
+            <p key={warning} className="text-sm text-warning">
               {warning}
             </p>
           ))}

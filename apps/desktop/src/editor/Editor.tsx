@@ -199,7 +199,7 @@ function PlayerBar({ durationMs }: { durationMs: number }) {
           <Button
             size="icon"
             variant="ghost"
-            className={cn("size-8", looping && "text-sky-400")}
+            className={cn("size-8", looping && "text-brand")}
             aria-label="Loop"
             aria-pressed={looping}
             onMouseDown={(e) => e.preventDefault()}
@@ -339,7 +339,7 @@ export function Editor() {
         </header>
         <div className="flex min-h-0 flex-1">
           <main className="flex min-w-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 bg-black/40 p-6">
+            <div className="bg-stage min-h-0 flex-1 p-6">
               <Preview
                 url={init.previewUrl}
                 onFrame={(frame) => layer.current?.frameShown(frame)}

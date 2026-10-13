@@ -263,7 +263,6 @@ pub fn open_window(app: &AppHandle, capture: Arc<Capture>) -> Result<(), String>
             .title(&capture.name)
             .inner_size(1280.0, 820.0)
             .min_inner_size(900.0, 560.0)
-            .theme(Some(tauri::Theme::Dark))
     })?;
     let app = app.clone();
     window.on_window_event(move |event| {

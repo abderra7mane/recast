@@ -50,6 +50,7 @@ import type { NewShape, Point, Shape, Size, TextShape } from "@/markup/model";
 import { drawShape, fontFor, LINE_HEIGHT, measureText } from "@/markup/render";
 import { makeCanvas } from "@/markup/session";
 import { deviceTransform, toImage, toView, type ViewMap } from "@/markup/view";
+import { onThemeChange } from "@/theme/apply";
 
 type Drag =
   | {
@@ -117,7 +118,7 @@ function TextEditor({
           onCommit();
         }
       }}
-      className="absolute resize-none overflow-hidden border-0 bg-transparent p-0 whitespace-pre outline-1 outline-sky-400 outline-dashed"
+      className="absolute resize-none overflow-hidden border-0 bg-transparent p-0 whitespace-pre outline-brand outline-1 outline-dashed"
       style={{
         left: at.x,
         top: at.y,
@@ -286,8 +287,10 @@ export function AnnotationLayer({
     const element = surface.current;
     const observer = new ResizeObserver(requestDraw);
     if (element) observer.observe(element);
+    const unsubscribeTheme = onThemeChange(requestDraw);
     return () => {
       unsubscribe();
+      unsubscribeTheme();
       observer.disconnect();
       cancelAnimationFrame(scheduled.current);
       scheduled.current = 0;

@@ -32,7 +32,7 @@ function Swatches({
           aria-label={name}
           aria-pressed={value.toLowerCase() === color}
           title={name}
-          className="size-6 rounded-full border border-white/20 ring-offset-2 ring-offset-black aria-pressed:ring-2 aria-pressed:ring-sky-400"
+          className="border-foreground/20 ring-offset-background aria-pressed:ring-brand size-6 rounded-full border ring-offset-2 aria-pressed:ring-2"
           style={{ background: color }}
           onClick={() => onChange(color)}
         />

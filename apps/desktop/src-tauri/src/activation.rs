@@ -7,6 +7,8 @@ use tauri::{
     ActivationPolicy, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
 };
 
+use crate::{appearance, settings::SettingsStore};
+
 const REGULAR_LABELS: &[&str] = &["library", "settings", "onboarding", "update"];
 const REGULAR_PREFIXES: &[&str] = &[
     crate::editor::commands::LABEL_PREFIX,
@@ -71,11 +73,16 @@ pub fn build(
     ) -> WebviewWindowBuilder<'_, Wry, AppHandle>,
 ) -> Result<WebviewWindow, String> {
     apply(app, app.state::<Tracker>().opened(label));
-    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()));
+    let theme = app.state::<SettingsStore>().get().appearance.applied;
+    let mut builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()));
+    if let Some(theme) = &theme {
+        builder = builder.initialization_script(appearance::boot_script(theme));
+    }
     let window = configure(builder).build().map_err(|e| {
         apply(app, app.state::<Tracker>().closed(label));
         e.to_string()
     })?;
+    appearance::apply_to_window(&window.as_ref().window(), theme.as_ref());
     let _ = window.set_focus();
     Ok(window)
 }
