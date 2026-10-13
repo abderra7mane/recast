@@ -10,6 +10,7 @@ import { Onboarding } from "@/onboarding/Onboarding";
 import { Settings } from "@/settings/Settings";
 import { startTheme } from "@/theme/apply";
 import { Update } from "@/update/Update";
+import { lockPage } from "@/webview";
 
 import "@/styles/styles.css";
 
@@ -33,6 +34,7 @@ function view(label: string) {
 const label = windowLabel();
 forwardToLogFile(label || "library");
 startTheme(label);
+if (label.startsWith("editor-") || label.startsWith("markup-")) lockPage();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>{view(label)}</StrictMode>,
