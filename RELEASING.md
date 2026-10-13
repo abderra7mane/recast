@@ -2,8 +2,9 @@
 
 Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. The
 workflow builds a `Recast.app` signed with a self-signed certificate, a DMG and a signed
-updater archive, then publishes them with `latest.json` as a GitHub release of this repo.
-The app checks the latest release's `latest.json` for updates, so the repo must be public.
+updater archive, then uploads them with `latest.json` to a draft GitHub release of this
+repo. The app checks the latest published release's `latest.json` for updates, so the repo
+must be public and nobody gets the release until the draft is published.
 
 ## One-time setup
 
@@ -51,6 +52,13 @@ put the public key in `plugins.updater` there instead.
    ```sh
    git tag v0.2.0
    git push origin v0.2.0
+   ```
+
+3. When the workflow is done, download the DMG from the draft release, check that it
+   opens and works, then publish it:
+
+   ```sh
+   gh release edit v0.2.0 --draft=false
    ```
 
 The workflow fails early when the tag doesn't match the version or a secret or
