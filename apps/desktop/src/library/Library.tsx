@@ -345,7 +345,7 @@ function Actions({ phase }: { phase: Phase }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-muted-foreground w-16 text-sm">Record</span>
+        <span className="text-muted-foreground mr-auto text-sm">Record</span>
         {active ? (
           <Button
             variant="destructive"
@@ -374,7 +374,7 @@ function Actions({ phase }: { phase: Phase }) {
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-muted-foreground w-16 text-sm">Capture</span>
+        <span className="text-muted-foreground mr-auto text-sm">Capture</span>
         {MODES.map(({ mode, label, Icon }) => (
           <Button
             key={mode}
