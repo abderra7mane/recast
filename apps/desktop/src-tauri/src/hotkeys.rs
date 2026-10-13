@@ -2,6 +2,8 @@
 
 use std::{collections::HashMap, sync::Mutex};
 
+use objc2::{rc::Retained, runtime::AnyObject};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, plugin::TauriPlugin};
@@ -24,6 +26,8 @@ pub struct ShortcutStatus {
     pub symbols: Option<String>,
     /// Why it doesn't work: a conflict or macOS refusing to register it.
     pub error: Option<String>,
+    /// What it takes over from macOS or other apps.
+    pub warning: Option<String>,
 }
 
 #[derive(Default)]
@@ -93,6 +97,7 @@ pub fn apply(app: &AppHandle) -> Vec<ShortcutStatus> {
     if let Err(e) = manager.unregister_all() {
         log::warn!("cannot unregister shortcuts: {e}");
     }
+    let system = system_shortcuts();
     let mut actions = HashMap::new();
     let mut statuses = Vec::new();
     for (action, checked) in shortcuts::resolve(&settings) {
@@ -101,12 +106,14 @@ pub fn apply(app: &AppHandle) -> Vec<ShortcutStatus> {
             shortcut: action.get(&settings).map(str::to_owned),
             symbols: None,
             error: None,
+            warning: None,
         };
         match checked {
             None => {}
             Some(Err(e)) => status.error = Some(e),
             Some(Ok(shortcut)) => {
                 status.symbols = Some(shortcut.symbols());
+                status.warning = shortcuts::warning(&shortcut, &system);
                 let key = hotkey(&shortcut);
                 if !suspended {
                     match manager.register(key) {
@@ -128,6 +135,43 @@ pub fn apply(app: &AppHandle) -> Vec<ShortcutStatus> {
     state.actions = actions;
     state.statuses = statuses.clone();
     statuses
+}
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    fn CopySymbolicHotKeys(hot_keys: *mut *mut NSArray<NSDictionary<NSString, AnyObject>>) -> i32;
+}
+
+/// The macOS shortcuts turned on in System Settings, such as the screenshot ones.
+fn system_shortcuts() -> Vec<Shortcut> {
+    let mut hot_keys = std::ptr::null_mut();
+    // SAFETY: `hot_keys` is a valid out pointer; CFArray is toll-free bridged with NSArray.
+    let status = unsafe { CopySymbolicHotKeys(&mut hot_keys) };
+    // SAFETY: the "Copy" call returns an owned array, or null on failure.
+    let Some(hot_keys) = (status == 0)
+        .then(|| unsafe { Retained::from_raw(hot_keys) })
+        .flatten()
+    else {
+        log::warn!("cannot read the macOS shortcuts: OSStatus {status}");
+        return Vec::new();
+    };
+    let number = |hot_key: &NSDictionary<NSString, AnyObject>, key: &str| {
+        hot_key
+            .objectForKey(&NSString::from_str(key))
+            .and_then(|value| value.downcast::<NSNumber>().ok())
+    };
+    hot_keys
+        .iter()
+        .filter(|hot_key| {
+            number(hot_key, "kHISymbolicHotKeyEnabled").is_some_and(|n| n.boolValue())
+        })
+        .filter_map(|hot_key| {
+            Shortcut::from_carbon(
+                number(&hot_key, "kHISymbolicHotKeyCode")?.unsignedShortValue(),
+                number(&hot_key, "kHISymbolicHotKeyModifiers")?.unsignedIntValue(),
+            )
+        })
+        .collect()
 }
 
 pub fn statuses(app: &AppHandle) -> Vec<ShortcutStatus> {
@@ -192,5 +236,13 @@ mod tests {
 
         let ctrl: Shortcut = "Ctrl+F5".parse().unwrap();
         assert_eq!(hotkey(&ctrl).mods, Modifiers::CONTROL);
+    }
+
+    #[test]
+    fn reads_the_macos_shortcuts() {
+        let system = system_shortcuts();
+        assert!(!system.is_empty());
+        let globe_only = |s: &Shortcut| s.key.starts_with("Key") && !(s.ctrl || s.alt || s.cmd);
+        assert!(!system.iter().any(globe_only), "{system:?}");
     }
 }

@@ -211,8 +211,9 @@ async fn set_update_settings(
     settings.update(|s| s.updates = updates)
 }
 
-/// Changes an action's shortcut, `None` turning it off. A conflict is an error and
-/// changes nothing; a shortcut macOS refuses is kept and reported in its status.
+/// Changes an action's shortcut, `None` turning it off. A shortcut without ⌘, ⌥ or ⌃, or
+/// taken by another action, is an error and changes nothing; a shortcut macOS refuses or
+/// that overlaps macOS or app shortcuts is kept and reported in its status.
 #[tauri::command]
 #[specta::specta]
 async fn set_shortcut(

@@ -85,88 +85,89 @@ impl ShortcutAction {
     }
 }
 
-/// Supported keys: W3C `KeyboardEvent.code` values and how macOS menus show them.
-const KEYS: &[(&str, &str)] = &[
-    ("KeyA", "A"),
-    ("KeyB", "B"),
-    ("KeyC", "C"),
-    ("KeyD", "D"),
-    ("KeyE", "E"),
-    ("KeyF", "F"),
-    ("KeyG", "G"),
-    ("KeyH", "H"),
-    ("KeyI", "I"),
-    ("KeyJ", "J"),
-    ("KeyK", "K"),
-    ("KeyL", "L"),
-    ("KeyM", "M"),
-    ("KeyN", "N"),
-    ("KeyO", "O"),
-    ("KeyP", "P"),
-    ("KeyQ", "Q"),
-    ("KeyR", "R"),
-    ("KeyS", "S"),
-    ("KeyT", "T"),
-    ("KeyU", "U"),
-    ("KeyV", "V"),
-    ("KeyW", "W"),
-    ("KeyX", "X"),
-    ("KeyY", "Y"),
-    ("KeyZ", "Z"),
-    ("Digit0", "0"),
-    ("Digit1", "1"),
-    ("Digit2", "2"),
-    ("Digit3", "3"),
-    ("Digit4", "4"),
-    ("Digit5", "5"),
-    ("Digit6", "6"),
-    ("Digit7", "7"),
-    ("Digit8", "8"),
-    ("Digit9", "9"),
-    ("F1", "F1"),
-    ("F2", "F2"),
-    ("F3", "F3"),
-    ("F4", "F4"),
-    ("F5", "F5"),
-    ("F6", "F6"),
-    ("F7", "F7"),
-    ("F8", "F8"),
-    ("F9", "F9"),
-    ("F10", "F10"),
-    ("F11", "F11"),
-    ("F12", "F12"),
-    ("F13", "F13"),
-    ("F14", "F14"),
-    ("F15", "F15"),
-    ("F16", "F16"),
-    ("F17", "F17"),
-    ("F18", "F18"),
-    ("F19", "F19"),
-    ("F20", "F20"),
-    ("Space", "Space"),
-    ("Enter", "↩"),
-    ("Tab", "⇥"),
-    ("Backspace", "⌫"),
-    ("Delete", "⌦"),
-    ("Home", "↖"),
-    ("End", "↘"),
-    ("PageUp", "⇞"),
-    ("PageDown", "⇟"),
-    ("ArrowLeft", "←"),
-    ("ArrowRight", "→"),
-    ("ArrowUp", "↑"),
-    ("ArrowDown", "↓"),
-    ("Minus", "-"),
-    ("Equal", "="),
-    ("BracketLeft", "["),
-    ("BracketRight", "]"),
-    ("Backslash", "\\"),
-    ("Semicolon", ";"),
-    ("Quote", "'"),
-    ("Comma", ","),
-    ("Period", "."),
-    ("Slash", "/"),
-    ("Backquote", "`"),
+/// Supported keys: W3C `KeyboardEvent.code` values, how macOS menus show them and their
+/// macOS virtual key codes.
+const KEYS: &[(&str, &str, u16)] = &[
+    ("KeyA", "A", 0x00),
+    ("KeyB", "B", 0x0b),
+    ("KeyC", "C", 0x08),
+    ("KeyD", "D", 0x02),
+    ("KeyE", "E", 0x0e),
+    ("KeyF", "F", 0x03),
+    ("KeyG", "G", 0x05),
+    ("KeyH", "H", 0x04),
+    ("KeyI", "I", 0x22),
+    ("KeyJ", "J", 0x26),
+    ("KeyK", "K", 0x28),
+    ("KeyL", "L", 0x25),
+    ("KeyM", "M", 0x2e),
+    ("KeyN", "N", 0x2d),
+    ("KeyO", "O", 0x1f),
+    ("KeyP", "P", 0x23),
+    ("KeyQ", "Q", 0x0c),
+    ("KeyR", "R", 0x0f),
+    ("KeyS", "S", 0x01),
+    ("KeyT", "T", 0x11),
+    ("KeyU", "U", 0x20),
+    ("KeyV", "V", 0x09),
+    ("KeyW", "W", 0x0d),
+    ("KeyX", "X", 0x07),
+    ("KeyY", "Y", 0x10),
+    ("KeyZ", "Z", 0x06),
+    ("Digit0", "0", 0x1d),
+    ("Digit1", "1", 0x12),
+    ("Digit2", "2", 0x13),
+    ("Digit3", "3", 0x14),
+    ("Digit4", "4", 0x15),
+    ("Digit5", "5", 0x17),
+    ("Digit6", "6", 0x16),
+    ("Digit7", "7", 0x1a),
+    ("Digit8", "8", 0x1c),
+    ("Digit9", "9", 0x19),
+    ("F1", "F1", 0x7a),
+    ("F2", "F2", 0x78),
+    ("F3", "F3", 0x63),
+    ("F4", "F4", 0x76),
+    ("F5", "F5", 0x60),
+    ("F6", "F6", 0x61),
+    ("F7", "F7", 0x62),
+    ("F8", "F8", 0x64),
+    ("F9", "F9", 0x65),
+    ("F10", "F10", 0x6d),
+    ("F11", "F11", 0x67),
+    ("F12", "F12", 0x6f),
+    ("F13", "F13", 0x69),
+    ("F14", "F14", 0x6b),
+    ("F15", "F15", 0x71),
+    ("F16", "F16", 0x6a),
+    ("F17", "F17", 0x40),
+    ("F18", "F18", 0x4f),
+    ("F19", "F19", 0x50),
+    ("F20", "F20", 0x5a),
+    ("Space", "Space", 0x31),
+    ("Enter", "↩", 0x24),
+    ("Tab", "⇥", 0x30),
+    ("Backspace", "⌫", 0x33),
+    ("Delete", "⌦", 0x75),
+    ("Home", "↖", 0x73),
+    ("End", "↘", 0x77),
+    ("PageUp", "⇞", 0x74),
+    ("PageDown", "⇟", 0x79),
+    ("ArrowLeft", "←", 0x7b),
+    ("ArrowRight", "→", 0x7c),
+    ("ArrowUp", "↑", 0x7e),
+    ("ArrowDown", "↓", 0x7d),
+    ("Minus", "-", 0x1b),
+    ("Equal", "=", 0x18),
+    ("BracketLeft", "[", 0x21),
+    ("BracketRight", "]", 0x1e),
+    ("Backslash", "\\", 0x2a),
+    ("Semicolon", ";", 0x29),
+    ("Quote", "'", 0x27),
+    ("Comma", ",", 0x2b),
+    ("Period", ".", 0x2f),
+    ("Slash", "/", 0x2c),
+    ("Backquote", "`", 0x32),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -201,6 +202,23 @@ impl Shortcut {
         self.key.len() > 1 && self.key.starts_with('F') && self.key[1..].parse::<u8>().is_ok()
     }
 
+    /// Whether the key reports the fn flag by itself, as function and navigation keys do.
+    fn sets_fn_flag(&self) -> bool {
+        self.is_function_key()
+            || matches!(
+                self.key,
+                "ArrowLeft"
+                    | "ArrowRight"
+                    | "ArrowUp"
+                    | "ArrowDown"
+                    | "Home"
+                    | "End"
+                    | "PageUp"
+                    | "PageDown"
+                    | "Delete"
+            )
+    }
+
     const fn new(ctrl: bool, alt: bool, shift: bool, cmd: bool, key: &'static str) -> Self {
         Self {
             ctrl,
@@ -214,8 +232,8 @@ impl Shortcut {
 
 fn key_symbol(key: &str) -> &'static str {
     KEYS.iter()
-        .find(|(code, _)| *code == key)
-        .map_or("?", |(_, symbol)| symbol)
+        .find(|(code, ..)| *code == key)
+        .map_or("?", |(_, symbol, _)| symbol)
 }
 
 impl fmt::Display for Shortcut {
@@ -245,8 +263,8 @@ impl FromStr for Shortcut {
             .ok_or("No key given.")?;
         let key = KEYS
             .iter()
-            .find(|(code, _)| *code == key)
-            .map(|(code, _)| *code)
+            .find(|(code, ..)| *code == key)
+            .map(|(code, ..)| *code)
             .ok_or_else(|| format!("The key {key} can't be used in a shortcut."))?;
         let mut shortcut = Self::new(false, false, false, false, key);
         for modifier in parts {
@@ -266,48 +284,31 @@ impl FromStr for Shortcut {
     }
 }
 
-/// Shortcuts macOS or nearly every app already uses.
-const RESERVED: &[(Shortcut, &str)] = &[
-    (
-        Shortcut::new(false, false, true, true, "Digit3"),
-        "the macOS screenshot of the screen",
-    ),
-    (
-        Shortcut::new(false, false, true, true, "Digit4"),
-        "the macOS screenshot of an area",
-    ),
-    (
-        Shortcut::new(false, false, true, true, "Digit5"),
-        "the macOS Screenshot app",
-    ),
-    (
-        Shortcut::new(true, false, true, true, "Digit3"),
-        "the macOS screenshot to the clipboard",
-    ),
-    (
-        Shortcut::new(true, false, true, true, "Digit4"),
-        "the macOS area screenshot to the clipboard",
-    ),
-    (
-        Shortcut::new(false, false, false, true, "Space"),
-        "Spotlight",
-    ),
-    (
-        Shortcut::new(false, true, false, true, "Space"),
-        "the Finder search window",
-    ),
-    (
-        Shortcut::new(true, false, false, false, "Space"),
-        "switching input sources",
-    ),
-    (
-        Shortcut::new(true, false, false, true, "Space"),
-        "Emoji & Symbols",
-    ),
-    (
-        Shortcut::new(true, false, false, true, "KeyQ"),
-        "Lock Screen",
-    ),
+impl Shortcut {
+    /// A shortcut from a Carbon virtual key code and modifier flags, if Recast can
+    /// register it: its key is supported and it doesn't need the Globe (fn) key.
+    pub fn from_carbon(key_code: u16, modifiers: u32) -> Option<Self> {
+        const CMD: u32 = 0x100;
+        const SHIFT: u32 = 0x200;
+        const OPTION: u32 = 0x800;
+        const CONTROL: u32 = 0x1000;
+        const FN: u32 = 0x20000;
+        let key = KEYS.iter().find(|(.., code)| *code == key_code)?.0;
+        let shortcut = Self::new(
+            modifiers & CONTROL != 0,
+            modifiers & OPTION != 0,
+            modifiers & SHIFT != 0,
+            modifiers & CMD != 0,
+            key,
+        );
+        (modifiers & FN == 0 || shortcut.sets_fn_flag()).then_some(shortcut)
+    }
+}
+
+/// Shortcuts that apps or the Apple menu use, beyond those macOS reports itself.
+const APP_SHORTCUTS: &[(Shortcut, &str)] = &[
+    (Shortcut::new(false, false, true, true, "KeyZ"), "Redo"),
+    (Shortcut::new(false, false, true, true, "KeyQ"), "Log Out"),
     (
         Shortcut::new(true, false, false, true, "KeyF"),
         "full screen",
@@ -317,26 +318,8 @@ const RESERVED: &[(Shortcut, &str)] = &[
         "Hide Others",
     ),
     (
-        Shortcut::new(false, true, false, true, "KeyD"),
-        "showing and hiding the Dock",
-    ),
-    (Shortcut::new(false, false, true, true, "KeyQ"), "Log Out"),
-    (Shortcut::new(false, false, true, true, "KeyZ"), "Redo"),
-    (
-        Shortcut::new(true, false, false, false, "ArrowUp"),
-        "Mission Control",
-    ),
-    (
-        Shortcut::new(true, false, false, false, "ArrowDown"),
-        "App Exposé",
-    ),
-    (
-        Shortcut::new(true, false, false, false, "ArrowLeft"),
-        "moving between Spaces",
-    ),
-    (
-        Shortcut::new(true, false, false, false, "ArrowRight"),
-        "moving between Spaces",
+        Shortcut::new(true, false, false, true, "Space"),
+        "Emoji & Symbols",
     ),
 ];
 
@@ -350,18 +333,6 @@ pub fn check(
     let shortcut: Shortcut = text.parse()?;
     if !(shortcut.ctrl || shortcut.alt || shortcut.cmd || shortcut.is_function_key()) {
         return Err("Add ⌘, ⌥ or ⌃ so the shortcut doesn't get in the way of typing.".into());
-    }
-    if shortcut.cmd
-        && !(shortcut.ctrl || shortcut.alt || shortcut.shift)
-        && !shortcut.is_function_key()
-    {
-        return Err(format!(
-            "{} is an app menu shortcut. Add ⌥, ⌃ or ⇧.",
-            shortcut.symbols()
-        ));
-    }
-    if let Some((_, name)) = RESERVED.iter().find(|(reserved, _)| *reserved == shortcut) {
-        return Err(format!("{} is already used by {name}.", shortcut.symbols()));
     }
     let taken = ShortcutAction::ALL.into_iter().find(|other| {
         *other != action
@@ -378,6 +349,29 @@ pub fn check(
         ));
     }
     Ok(shortcut)
+}
+
+/// What `shortcut` takes over from macOS or other apps, given the macOS shortcuts that
+/// are turned on.
+pub fn warning(shortcut: &Shortcut, system: &[Shortcut]) -> Option<String> {
+    let symbols = shortcut.symbols();
+    if system.contains(shortcut) {
+        return Some(format!(
+            "macOS uses {symbols} too. Turn it off in System Settings › Keyboard › Keyboard Shortcuts so Recast gets it."
+        ));
+    }
+    if let Some((_, name)) = APP_SHORTCUTS.iter().find(|(s, _)| s == shortcut) {
+        return Some(format!(
+            "{symbols} is {name} in most apps. Recast takes it over in every app."
+        ));
+    }
+    let modifiers = [shortcut.ctrl, shortcut.alt, shortcut.shift, shortcut.cmd];
+    if modifiers.into_iter().filter(|on| *on).count() == 1 && !shortcut.is_function_key() {
+        return Some(format!(
+            "Apps often use {symbols} themselves. Recast takes it over in every app."
+        ));
+    }
+    None
 }
 
 /// The shortcuts in `settings` that can be registered, in action order. An action whose
@@ -439,7 +433,7 @@ mod tests {
 
     #[test]
     fn every_key_is_a_hotkey_code() {
-        for (code, _) in KEYS {
+        for (code, ..) in KEYS {
             assert!(
                 code.parse::<tauri_plugin_global_shortcut::Code>().is_ok(),
                 "{code}"
@@ -508,21 +502,65 @@ mod tests {
     }
 
     #[test]
-    fn command_alone_belongs_to_app_menus() {
-        let err = check(ShortcutAction::RecordArea, "Cmd+KeyR", &defaults()).unwrap_err();
-        assert!(err.contains("⌘R"), "{err}");
-        assert!(check(ShortcutAction::RecordArea, "Cmd+F6", &defaults()).is_ok());
+    fn allows_any_shortcut_with_a_modifier_typing_does_not_use() {
+        for allowed in [
+            "Cmd+KeyR",
+            "Alt+Space",
+            "Ctrl+Space",
+            "Shift+Cmd+Digit4",
+            "Cmd+F6",
+        ] {
+            assert!(
+                check(ShortcutAction::RecordWindow, allowed, &defaults()).is_ok(),
+                "{allowed}"
+            );
+        }
     }
 
     #[test]
-    fn macos_shortcuts_conflict() {
-        let err = check(ShortcutAction::CaptureArea, "Shift+Cmd+Digit4", &defaults()).unwrap_err();
+    fn carbon_shortcuts_map_to_key_codes() {
+        let screenshot = Shortcut::from_carbon(0x15, 0x100 | 0x200).unwrap();
+        assert_eq!(screenshot.to_string(), "Shift+Cmd+Digit4");
+        let mission_control = Shortcut::from_carbon(0x7e, 0x1000 | 0x20000).unwrap();
+        assert_eq!(mission_control.to_string(), "Ctrl+ArrowUp");
+        assert_eq!(Shortcut::from_carbon(0x35, 0x100), None, "Escape");
+        assert_eq!(Shortcut::from_carbon(0x0c, 0x20000), None, "Globe+Q");
+        let show_desktop = Shortcut::from_carbon(0x67, 0x20000).unwrap();
+        assert_eq!(show_desktop.to_string(), "F11");
+    }
+
+    #[test]
+    fn every_key_has_its_own_key_code() {
+        let mut codes: Vec<_> = KEYS.iter().map(|(.., code)| *code).collect();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), KEYS.len());
+    }
+
+    #[test]
+    fn warns_about_shortcuts_taken_from_macos_and_apps() {
+        let parse = |text: &str| text.parse::<Shortcut>().unwrap();
+        let system = [parse("Shift+Cmd+Digit4")];
         assert_eq!(
-            err,
-            "⇧⌘4 is already used by the macOS screenshot of an area."
+            warning(&parse("Shift+Cmd+Digit4"), &system).unwrap(),
+            "macOS uses ⇧⌘4 too. Turn it off in System Settings › Keyboard › Keyboard Shortcuts so Recast gets it."
         );
-        let err = check(ShortcutAction::RecordWindow, "Ctrl+Cmd+Space", &defaults()).unwrap_err();
-        assert!(err.contains("Emoji"), "{err}");
+        assert_eq!(warning(&parse("Shift+Cmd+Digit4"), &[]), None);
+        assert_eq!(
+            warning(&parse("Shift+Cmd+KeyZ"), &[]).unwrap(),
+            "⇧⌘Z is Redo in most apps. Recast takes it over in every app."
+        );
+        for single in ["Cmd+KeyR", "Alt+Space", "Ctrl+KeyA"] {
+            assert!(
+                warning(&parse(single), &[])
+                    .unwrap()
+                    .starts_with("Apps often use"),
+                "{single}"
+            );
+        }
+        for quiet in ["Alt+Shift+Cmd+KeyR", "Ctrl+Alt+KeyW", "Cmd+F6", "F13"] {
+            assert_eq!(warning(&parse(quiet), &[]), None, "{quiet}");
+        }
     }
 
     #[test]

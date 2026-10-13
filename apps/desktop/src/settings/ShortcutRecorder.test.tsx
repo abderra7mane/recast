@@ -57,14 +57,31 @@ describe("ShortcutRecorder", () => {
 
   it("shows conflicts reported when saving", async () => {
     const { user } = setup({
-      onChange: async () =>
-        "⇧⌘4 is already used by the macOS screenshot of an area.",
+      onChange: async () => "⌥⇧⌘R is already used for Record area.",
     });
     await user.click(button());
-    await user.keyboard("{Shift>}{Meta>}[Digit4]{/Meta}{/Shift}");
+    await user.keyboard("{Alt>}{Shift>}{Meta>}[KeyR]{/Meta}{/Shift}{/Alt}");
     expect((await screen.findByRole("alert")).textContent).toMatch(
-      /already used by the macOS screenshot/,
+      /already used for Record area/,
     );
+  });
+
+  it("shows what the shortcut takes over unless it fails", async () => {
+    const warning =
+      "macOS uses ⇧⌘4 too. Turn it off in System Settings › Keyboard › Keyboard Shortcuts so Recast gets it.";
+    const { unmount } = render(
+      <ShortcutRecorder
+        label="Record area"
+        shortcut="Shift+Cmd+Digit4"
+        warning={warning}
+        onChange={async () => null}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toBe(warning);
+    unmount();
+
+    setup({ error: "macOS didn't accept ⌥⇧⌘S", warning });
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("shows registration failures and offers to turn the shortcut off", async () => {

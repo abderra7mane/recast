@@ -9,6 +9,8 @@ type Props = {
   shortcut: string | null;
   /** A conflict or registration failure to show under the shortcut. */
   error?: string | null;
+  /** What the shortcut takes over from macOS or other apps. */
+  warning?: string | null;
   /** Saves the shortcut (`null` turns it off); resolves to an error message, if any. */
   onChange: (shortcut: string | null) => Promise<string | null>;
   /** Called when recording starts and stops, so global shortcuts can pause meanwhile. */
@@ -19,6 +21,7 @@ export function ShortcutRecorder({
   label,
   shortcut,
   error,
+  warning,
   onChange,
   onRecording,
 }: Props) {
@@ -121,10 +124,17 @@ export function ShortcutRecorder({
           Press the new shortcut. Esc cancels, Delete turns it off.
         </p>
       )}
-      {message && (
+      {message ? (
         <p role="alert" className="text-destructive text-xs">
           {message}
         </p>
+      ) : (
+        warning &&
+        !recording && (
+          <p role="status" className="text-warning text-xs">
+            {warning}
+          </p>
+        )
       )}
     </div>
   );

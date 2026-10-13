@@ -275,6 +275,7 @@ export function Settings() {
                 label={label}
                 shortcut={settings.shortcuts[action]}
                 error={status?.error}
+                warning={status?.warning}
                 onChange={(shortcut) => changeShortcut(action, shortcut)}
                 onRecording={(recordingShortcut) =>
                   void commands.suspendShortcuts(recordingShortcut)

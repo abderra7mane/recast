@@ -49,8 +49,9 @@ export const commands = {
 	setRecordingSettings: (recording: RecordingSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_recording_settings", { recording })),
 	setUpdateSettings: (updates: UpdateSettings) => typedError<AppSettings, string>(__TAURI_INVOKE("set_update_settings", { updates })),
 	/**
-	 *  Changes an action's shortcut, `None` turning it off. A conflict is an error and
-	 *  changes nothing; a shortcut macOS refuses is kept and reported in its status.
+	 *  Changes an action's shortcut, `None` turning it off. A shortcut without ⌘, ⌥ or ⌃, or
+	 *  taken by another action, is an error and changes nothing; a shortcut macOS refuses or
+	 *  that overlaps macOS or app shortcuts is kept and reported in its status.
 	 */
 	setShortcut: (action: ShortcutAction, shortcut: string | null) => typedError<ShortcutStatus[], string>(__TAURI_INVOKE("set_shortcut", { action, shortcut })),
 	/**
@@ -547,6 +548,8 @@ export type ShortcutStatus = {
 	symbols: string | null,
 	/**  Why it doesn't work: a conflict or macOS refusing to register it. */
 	error: string | null,
+	/**  What it takes over from macOS or other apps. */
+	warning: string | null,
 };
 
 export type SoundPack = "softTap" | "mouseClick" | "mechanical" | "trackpadTap" | "pop" | "tick";

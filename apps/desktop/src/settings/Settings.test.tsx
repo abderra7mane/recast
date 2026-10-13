@@ -37,17 +37,43 @@ const STATUSES: ShortcutStatus[] = [
     shortcut: "Alt+Shift+Cmd+KeyR",
     symbols: "⌥⇧⌘R",
     error: null,
+    warning: null,
   },
   {
     action: "captureArea",
     shortcut: "Alt+Shift+Cmd+KeyS",
     symbols: "⌥⇧⌘S",
     error: "macOS didn't accept ⌥⇧⌘S",
+    warning: null,
   },
-  { action: "recordWindow", shortcut: null, symbols: null, error: null },
-  { action: "recordDisplay", shortcut: null, symbols: null, error: null },
-  { action: "captureWindow", shortcut: null, symbols: null, error: null },
-  { action: "captureDisplay", shortcut: null, symbols: null, error: null },
+  {
+    action: "recordWindow",
+    shortcut: null,
+    symbols: null,
+    error: null,
+    warning: null,
+  },
+  {
+    action: "recordDisplay",
+    shortcut: null,
+    symbols: null,
+    error: null,
+    warning: null,
+  },
+  {
+    action: "captureWindow",
+    shortcut: null,
+    symbols: null,
+    error: null,
+    warning: null,
+  },
+  {
+    action: "captureDisplay",
+    shortcut: null,
+    symbols: null,
+    error: null,
+    warning: null,
+  },
 ];
 
 const ok = <T,>(data: T) => Promise.resolve({ status: "ok" as const, data });
@@ -157,7 +183,7 @@ describe("Settings", () => {
     });
   });
 
-  it("shows shortcut failures and saves a new shortcut", async () => {
+  it("shows shortcut failures and saves a new shortcut with its warning", async () => {
     const user = await openTab("Shortcuts");
     expect(screen.getByRole("alert").textContent).toBe(
       "macOS didn't accept ⌥⇧⌘S",
@@ -166,7 +192,13 @@ describe("Settings", () => {
       ok(
         STATUSES.map((s) =>
           s.action === "captureWindow"
-            ? { ...s, shortcut: "Ctrl+Alt+KeyW", symbols: "⌃⌥W" }
+            ? {
+                ...s,
+                shortcut: "Cmd+KeyW",
+                symbols: "⌘W",
+                warning:
+                  "Apps often use ⌘W themselves. Recast takes it over in every app.",
+              }
             : s,
         ),
       ),
@@ -177,16 +209,19 @@ describe("Settings", () => {
     expect(recorder.textContent).toBe("Record Shortcut");
     await user.click(recorder);
     expect(commands.suspendShortcuts).toHaveBeenLastCalledWith(true);
-    await user.keyboard("{Control>}{Alt>}[KeyW]{/Alt}{/Control}");
+    await user.keyboard("{Meta>}[KeyW]{/Meta}");
     expect(commands.setShortcut).toHaveBeenCalledWith(
       "captureWindow",
-      "Ctrl+Alt+KeyW",
+      "Cmd+KeyW",
     );
     expect(commands.suspendShortcuts).toHaveBeenLastCalledWith(false);
     expect(
       (await screen.findByRole("button", { name: "Capture window shortcut" }))
         .textContent,
-    ).toBe("⌃⌥W");
+    ).toBe("⌘W");
+    expect(screen.getByRole("status").textContent).toBe(
+      "Apps often use ⌘W themselves. Recast takes it over in every app.",
+    );
   });
 
   it("lists a shortcut for every record and capture mode", async () => {
