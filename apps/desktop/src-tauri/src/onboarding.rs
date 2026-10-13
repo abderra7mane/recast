@@ -1,5 +1,6 @@
-//! Permissions setup: deep links into System Settings and relaunching after Screen
-//! Recording is granted, which macOS only applies to a new process.
+//! Permissions setup: deep links into System Settings, resetting stale grants and
+//! relaunching after Screen Recording is granted, which macOS only applies to a new
+//! process.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,21 @@ pub fn privacy_url(permission: Permission) -> &'static str {
     }
 }
 
+/// The privacy (TCC) service that stores Recast's decision for `permission`.
+pub fn tcc_service(permission: Permission) -> &'static str {
+    match permission {
+        Permission::ScreenRecording => "ScreenCapture",
+        Permission::InputMonitoring => "ListenEvent",
+        Permission::Microphone => "Microphone",
+    }
+}
+
+/// `tccutil` arguments that reset `permission` for `bundle_id` only; without a bundle
+/// id, `tccutil` resets every app.
+pub fn tccutil_reset_args(permission: Permission, bundle_id: &str) -> Option<[&str; 3]> {
+    (!bundle_id.trim().is_empty()).then(|| ["reset", tcc_service(permission), bundle_id])
+}
+
 /// `Recast.app` for an executable at `Recast.app/Contents/MacOS/<name>`.
 pub fn app_bundle(executable: &Path) -> Option<PathBuf> {
     let macos = executable.parent()?;
@@ -42,6 +58,26 @@ pub async fn open_privacy_settings(permission: Permission) -> Result<(), String>
         .status()
         .map_err(|e| e.to_string())
         .map(|_| ())
+}
+
+/// Forgets Recast's decision for `permission`. macOS ties a grant to the signature of
+/// the build it was given to, so after an update to a differently signed build System
+/// Settings can show Recast as allowed while macOS denies it.
+#[tauri::command]
+#[specta::specta]
+pub async fn reset_permission(app: AppHandle, permission: Permission) -> Result<(), String> {
+    let bundle_id = app.config().identifier.clone();
+    let args = tccutil_reset_args(permission, &bundle_id).ok_or("Recast has no bundle id.")?;
+    let output = std::process::Command::new("/usr/bin/tccutil")
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("tccutil failed: {}", stderr.trim()))
+    }
 }
 
 /// Quits and opens Recast again through Launch Services.
@@ -92,6 +128,23 @@ mod tests {
         assert!(privacy_url(Permission::ScreenRecording).ends_with("?Privacy_ScreenCapture"));
         assert!(privacy_url(Permission::InputMonitoring).ends_with("?Privacy_ListenEvent"));
         assert!(privacy_url(Permission::Microphone).ends_with("?Privacy_Microphone"));
+    }
+
+    #[test]
+    fn resets_only_recasts_entry_of_each_service() {
+        assert_eq!(
+            tccutil_reset_args(Permission::ScreenRecording, "com.abdou.recast"),
+            Some(["reset", "ScreenCapture", "com.abdou.recast"])
+        );
+        assert_eq!(
+            tccutil_reset_args(Permission::InputMonitoring, "com.abdou.recast"),
+            Some(["reset", "ListenEvent", "com.abdou.recast"])
+        );
+        assert_eq!(
+            tccutil_reset_args(Permission::Microphone, "com.abdou.recast"),
+            Some(["reset", "Microphone", "com.abdou.recast"])
+        );
+        assert_eq!(tccutil_reset_args(Permission::Microphone, " "), None);
     }
 
     #[test]

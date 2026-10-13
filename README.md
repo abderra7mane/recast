@@ -33,6 +33,9 @@ to Recast. Recast updates itself from then on.
 
 Recast asks for **Screen Recording** (to capture), **Input Monitoring** (to record
 clicks and the cursor) and **Microphone** (only when you record it).
+If macOS keeps asking for a permission that System Settings already shows as allowed
+(after updating from 0.1.5 or earlier, for example), open Settings → Permissions → Show
+Onboarding in Recast, click **Reset** next to the permission and turn it on again.
 
 Requires macOS 14 or later.
 

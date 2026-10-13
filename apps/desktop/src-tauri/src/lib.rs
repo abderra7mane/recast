@@ -294,6 +294,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
             check_permissions,
             request_permission,
             onboarding::open_privacy_settings,
+            onboarding::reset_permission,
             onboarding::relaunch,
             onboarding::complete_onboarding,
             start_recording,

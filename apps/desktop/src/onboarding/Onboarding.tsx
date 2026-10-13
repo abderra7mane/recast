@@ -9,6 +9,8 @@ import {
   STATE_LABEL,
   actionFor,
   canFinish,
+  canReset,
+  resetFailedMessage,
   type PermissionInfo,
 } from "@/onboarding/permissions";
 
@@ -18,10 +20,12 @@ function PermissionRow({
   info,
   permissions,
   onAct,
+  onReset,
 }: {
   info: PermissionInfo;
   permissions: Permissions | null;
   onAct: (id: Permission) => void;
+  onReset: (id: Permission) => void;
 }) {
   const state = permissions?.[info.id];
   const granted = state === "granted";
@@ -64,6 +68,20 @@ function PermissionRow({
           {info.without}
         </p>
       )}
+      {canReset(info.id, state) && (
+        <p className="text-muted-foreground flex items-center gap-1 pl-8 text-xs">
+          Shows as allowed in System Settings?
+          <Button
+            size="xs"
+            variant="link"
+            className="h-auto px-0 text-xs"
+            aria-label={`Reset ${info.title}`}
+            onClick={() => onReset(info.id)}
+          >
+            Reset
+          </Button>
+        </p>
+      )}
     </div>
   );
 }
@@ -98,6 +116,23 @@ export function Onboarding() {
     await refresh();
   };
 
+  const reset = async (id: Permission) => {
+    setError(null);
+    const result = await commands.resetPermission(id);
+    if (result.status === "error") {
+      const title = PERMISSIONS.find((p) => p.id === id)?.title ?? id;
+      setError(resetFailedMessage(title, result.error));
+      return;
+    }
+    // Asking again adds Recast back to the list in System Settings.
+    const state = await commands.requestPermission(id);
+    if (state !== "granted") {
+      const opened = await commands.openPrivacySettings(id);
+      if (opened.status === "error") setError(opened.error);
+    }
+    await refresh();
+  };
+
   const finish = async () => {
     const result = await commands.completeOnboarding();
     if (result.status === "error") setError(result.error);
@@ -125,6 +160,7 @@ export function Onboarding() {
             info={info}
             permissions={permissions}
             onAct={(id) => void act(id)}
+            onReset={(id) => void reset(id)}
           />
         ))}
       </div>

@@ -10,6 +10,12 @@ export const commands = {
 	checkPermissions: () => __TAURI_INVOKE<Permissions>("check_permissions"),
 	requestPermission: (permission: Permission) => __TAURI_INVOKE<PermissionState>("request_permission", { permission }),
 	openPrivacySettings: (permission: Permission) => typedError<null, string>(__TAURI_INVOKE("open_privacy_settings", { permission })),
+	/**
+	 *  Forgets Recast's decision for `permission`. macOS ties a grant to the signature of
+	 *  the build it was given to, so after an update to a differently signed build System
+	 *  Settings can show Recast as allowed while macOS denies it.
+	 */
+	resetPermission: (permission: Permission) => typedError<null, string>(__TAURI_INVOKE("reset_permission", { permission })),
 	/**  Quits and opens Recast again through Launch Services. */
 	relaunch: () => typedError<null, string>(__TAURI_INVOKE("relaunch")),
 	/**  Remembers that onboarding is done and closes its window. */

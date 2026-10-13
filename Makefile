@@ -2,8 +2,10 @@ DESKTOP := apps/desktop
 PNPM := pnpm --dir $(DESKTOP)
 # The local Apple Development certificate keeps macOS permissions across rebuilds.
 SIGNING_IDENTITY ?= Apple Development
+# Keeps the release signing certificate away from dependency install and build scripts.
+WITHOUT_CERTIFICATE := env -u MACOS_CERTIFICATE -u MACOS_CERTIFICATE_PASSWORD
 
-.PHONY: help install dev build qa-build bindings test test-rust test-ui lint lint-rust lint-ui lint-workflows fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions updater-key release-check release-bundle release-assets clean
+.PHONY: help install dev build qa-build bindings test test-rust test-ui lint lint-rust lint-ui lint-workflows fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions updater-key signing-cert release-check release-bundle release-assets clean
 
 help:
 	@echo "install   install JS dependencies"
@@ -25,13 +27,14 @@ help:
 	@echo "discard   move a crashed bundle to the Trash: make discard BUNDLE=path"
 	@echo "permissions show Screen Recording / Input Monitoring / Microphone status"
 	@echo "updater-key generate the updater signing key pair in ~/.tauri/recast.key and print its public key"
+	@echo "signing-cert create the self-signed release signing certificate in ~/.tauri/recast-signing.p12 (ARGS=--import adds it to the login keychain)"
 	@echo "lint-workflows check the GitHub Actions workflows with actionlint"
 	@echo "release-check   CI: check that TAG matches the app version"
-	@echo "release-bundle  CI: build the ad-hoc signed app, DMG and signed updater archive for each release target"
+	@echo "release-bundle  CI: build the signed app, DMG and signed updater archive for each release target"
 	@echo "release-assets  CI: collect the release files and latest.json: make release-assets REPO=owner/repo"
 
 install:
-	pnpm install --frozen-lockfile
+	$(WITHOUT_CERTIFICATE) pnpm install --frozen-lockfile
 
 dev: install
 	$(PNPM) tauri dev
@@ -46,7 +49,7 @@ qa-build: install bindings
 	@echo "$(CURDIR)/target/qa/release/bundle/macos/Recast.app"
 
 bindings:
-	cargo run --quiet -p recast-desktop --example export-bindings
+	$(WITHOUT_CERTIFICATE) cargo run --quiet -p recast-desktop --example export-bindings
 
 # Runs every suite, even after a failing one, and fails if any failed.
 test:
@@ -123,6 +126,9 @@ updater-key:
 	@cat "$(UPDATER_KEY).pub"
 	@echo
 
+signing-cert:
+	scripts/make-signing-cert.sh $(ARGS)
+
 lint-workflows:
 	@if command -v actionlint >/dev/null; then actionlint; else echo "actionlint is not installed, skipping (brew install actionlint)."; fi
 
@@ -133,13 +139,19 @@ release-check:
 	node scripts/release.mjs check-version "$(TAG)"
 
 # Needs UPDATER_ENDPOINT, UPDATER_PUBKEY and TAURI_SIGNING_PRIVATE_KEY (and its
-# password, if any) in the environment. The app is signed ad hoc.
+# password, if any) in the environment. The app is signed with MACOS_CERTIFICATE
+# (and MACOS_CERTIFICATE_PASSWORD) or RELEASE_SIGNING_IDENTITY, see
+# scripts/with-signing-identity.sh; ad hoc without them, except under CI.
 release-bundle: install bindings
 	@mkdir -p target
-	node scripts/release.mjs config > "$(RELEASE_CONFIG)"
-	for target in $(RELEASE_TARGETS); do \
-		APPLE_SIGNING_IDENTITY=- $(PNPM) tauri build --bundles app,dmg --target $$target --config "$(RELEASE_CONFIG)" || exit 1; \
-	done
+	$(WITHOUT_CERTIFICATE) node scripts/release.mjs config > "$(RELEASE_CONFIG)"
+	RELEASE_SIGNING_IDENTITY="$(RELEASE_SIGNING_IDENTITY)" scripts/with-signing-identity.sh sh -c '\
+		for target in $(RELEASE_TARGETS); do \
+			$(PNPM) tauri build --bundles app,dmg --target $$target --config "$(RELEASE_CONFIG)" || exit 1; \
+			app="target/$$target/release/bundle/macos/Recast.app"; \
+			codesign --verify --deep --strict "$$app" || exit 1; \
+			codesign --display --requirements - "$$app" 2>&1 | grep "designated"; \
+		done'
 
 release-assets:
 	node scripts/release.mjs assets "$(REPO)" target/release-assets

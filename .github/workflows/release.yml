@@ -29,18 +29,24 @@ jobs:
         env:
           UPDATER_PUBKEY: ${{ vars.UPDATER_PUBKEY }}
           HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE != '' }}
+          HAS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD != '' }}
         run: |
           missing=()
           [ -n "$UPDATER_PUBKEY" ] || missing+=("variable UPDATER_PUBKEY")
           [ "$HAS_SIGNING_KEY" = "true" ] || missing+=("secret TAURI_SIGNING_PRIVATE_KEY")
+          [ "$HAS_CERTIFICATE" = "true" ] || missing+=("secret MACOS_CERTIFICATE")
+          [ "$HAS_CERTIFICATE_PASSWORD" = "true" ] || missing+=("secret MACOS_CERTIFICATE_PASSWORD")
           if [ ${#missing[@]} -gt 0 ]; then
             printf '::error::Missing %s\n' "${missing[@]}"
             exit 1
           fi
           make release-check TAG="$GITHUB_REF_NAME"
 
-      - name: Build the app, DMG and signed updater archive
+      - name: Build the signed app, DMG and signed updater archive
         env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           UPDATER_ENDPOINT: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
           UPDATER_PUBKEY: ${{ vars.UPDATER_PUBKEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

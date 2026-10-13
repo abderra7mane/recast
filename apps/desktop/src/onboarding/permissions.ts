@@ -51,6 +51,17 @@ export function actionFor(
   return "openSettings";
 }
 
+/**
+ * macOS ties a grant to how the build that got it was signed, so after some updates
+ * System Settings shows Recast as allowed while macOS denies it. Resetting the
+ * permission clears that stale entry.
+ */
+export const canReset = (id: Permission, state: PermissionState | undefined) =>
+  actionFor(id, state) === "openSettings";
+
+export const resetFailedMessage = (title: string, error: string) =>
+  `Couldn't reset ${title}: ${error}. In System Settings, select Recast in the ${title} list and remove it with the − button, then click Open System Settings here to add it back.`;
+
 export const canFinish = (permissions: Permissions | null) =>
   permissions?.screenRecording === "granted";
 

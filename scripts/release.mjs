@@ -81,6 +81,10 @@ Recast is not notarized. The first time you open it, macOS blocks it:
 3. Open System Settings → Privacy & Security, scroll to Security and click Open Anyway next to Recast.
 
 Updates from inside Recast install without these steps.
+
+If macOS asks again for a permission that System Settings shows as allowed, open
+Settings → Permissions → Show Onboarding in Recast, click Reset next to the
+permission and turn it on again.
 `;
 }
 
