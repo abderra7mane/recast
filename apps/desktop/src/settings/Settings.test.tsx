@@ -244,6 +244,25 @@ describe("Settings", () => {
     ).toBe("Record Shortcut");
   });
 
+  it("records one shortcut at a time", async () => {
+    const user = await openTab("Shortcuts");
+    const recordArea = screen.getByRole("button", {
+      name: "Record area shortcut",
+    });
+    const captureWindow = screen.getByRole("button", {
+      name: "Capture window shortcut",
+    });
+    await user.click(recordArea);
+    await user.click(captureWindow);
+    expect(recordArea.textContent).toBe("⌥⇧⌘R");
+    expect(captureWindow.textContent).toBe("Type shortcut…");
+    expect(commands.suspendShortcuts.mock.calls).toEqual([[true]]);
+
+    await user.keyboard("{Escape}");
+    expect(captureWindow.textContent).toBe("Record Shortcut");
+    expect(commands.suspendShortcuts).toHaveBeenLastCalledWith(false);
+  });
+
   it("reports a conflicting shortcut without changing it", async () => {
     const user = await openTab("Shortcuts");
     commands.setShortcut.mockReturnValue(

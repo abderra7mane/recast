@@ -13,8 +13,10 @@ type Props = {
   warning?: string | null;
   /** Saves the shortcut (`null` turns it off); resolves to an error message, if any. */
   onChange: (shortcut: string | null) => Promise<string | null>;
-  /** Called when recording starts and stops, so global shortcuts can pause meanwhile. */
-  onRecording?: (recording: boolean) => void;
+  /** Whether this shortcut is being recorded; only one should be at a time. */
+  recording: boolean;
+  /** Called when recording starts and stops. */
+  onRecording: (recording: boolean) => void;
 };
 
 export function ShortcutRecorder({
@@ -22,17 +24,16 @@ export function ShortcutRecorder({
   shortcut,
   error,
   warning,
+  recording,
   onChange,
   onRecording,
 }: Props) {
-  const [recording, setRecording] = useState(false);
   const [pending, setPending] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
 
   const setListening = (listening: boolean) => {
-    setRecording(listening);
     setPending("");
-    onRecording?.(listening);
+    onRecording(listening);
   };
 
   const save = async (next: string | null) => {

@@ -1,15 +1,32 @@
 // @vitest-environment jsdom
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ShortcutRecorder } from "@/settings/ShortcutRecorder";
 
-function setup(props: Partial<Parameters<typeof ShortcutRecorder>[0]> = {}) {
+type Props = Parameters<typeof ShortcutRecorder>[0];
+
+function Recorder(props: Omit<Props, "recording">) {
+  const [recording, setRecording] = useState(false);
+  return (
+    <ShortcutRecorder
+      {...props}
+      recording={recording}
+      onRecording={(next) => {
+        setRecording(next);
+        props.onRecording(next);
+      }}
+    />
+  );
+}
+
+function setup(props: Partial<Omit<Props, "recording">> = {}) {
   const onChange = vi.fn(async () => null as string | null);
   const onRecording = vi.fn();
   render(
-    <ShortcutRecorder
+    <Recorder
       label="Capture area"
       shortcut="Alt+Shift+Cmd+KeyS"
       onChange={onChange}
@@ -74,7 +91,9 @@ describe("ShortcutRecorder", () => {
         label="Record area"
         shortcut="Shift+Cmd+Digit4"
         warning={warning}
+        recording={false}
         onChange={async () => null}
+        onRecording={() => {}}
       />,
     );
     expect(screen.getByRole("status").textContent).toBe(warning);

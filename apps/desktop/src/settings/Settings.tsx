@@ -110,6 +110,9 @@ export function Settings() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(
+    null,
+  );
 
   useEffect(() => {
     void commands.getSettings().then((result) => {
@@ -163,6 +166,13 @@ export function Settings() {
       ...settings,
       updates: next,
     });
+  };
+
+  const recordShortcut = (action: ShortcutAction | null) => {
+    if ((action === null) !== (recordingAction === null)) {
+      void commands.suspendShortcuts(action !== null);
+    }
+    setRecordingAction(action);
   };
 
   const changeShortcut = async (
@@ -276,9 +286,10 @@ export function Settings() {
                 shortcut={settings.shortcuts[action]}
                 error={status?.error}
                 warning={status?.warning}
+                recording={recordingAction === action}
                 onChange={(shortcut) => changeShortcut(action, shortcut)}
-                onRecording={(recordingShortcut) =>
-                  void commands.suspendShortcuts(recordingShortcut)
+                onRecording={(isRecording) =>
+                  recordShortcut(isRecording ? action : null)
                 }
               />
             );
