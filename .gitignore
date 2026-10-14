@@ -8,6 +8,8 @@ dist-ssr
 *.local
 *.log
 .vite
+.vercel
+.tanstack
 
 # Recording log of a test bundle
 !crates/recast-project/tests/fixtures/**/*.log
