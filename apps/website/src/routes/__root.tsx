@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
 import appCss from "@/styles.css?url";
+import { THEME_SCRIPT } from "@/components/ThemeToggle";
 
 const title = "Recast: screen recorder for macOS";
 const description =
@@ -20,9 +21,20 @@ export const Route = createRootRoute({
       { property: "og:description", content: description },
       { property: "og:image", content: image },
       { name: "twitter:card", content: "summary" },
+      { name: "color-scheme", content: "light dark" },
     ],
+    scripts: [{ children: THEME_SCRIPT }],
     links: [
       { rel: "stylesheet", href: appCss },
+      {
+        rel: "preconnect",
+        href: "https://fonts.gstatic.com",
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap",
+      },
       {
         rel: "icon",
         type: "image/png",
@@ -37,7 +49,7 @@ export const Route = createRootRoute({
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
