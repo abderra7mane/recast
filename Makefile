@@ -1,11 +1,13 @@
 DESKTOP := apps/desktop
 PNPM := pnpm --dir $(DESKTOP)
+WEBSITE := apps/website
+WEBSITE_PNPM := pnpm --dir $(WEBSITE)
 # The local Apple Development certificate keeps macOS permissions across rebuilds.
 SIGNING_IDENTITY ?= Apple Development
 # Keeps the release signing certificate away from dependency install and build scripts.
 WITHOUT_CERTIFICATE := env -u MACOS_CERTIFICATE -u MACOS_CERTIFICATE_PASSWORD
 
-.PHONY: help install dev build qa-build bindings test test-rust test-ui lint lint-rust lint-ui lint-workflows fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions updater-key signing-cert release-check release-bundle release-assets clean
+.PHONY: help install dev build qa-build bindings test test-rust test-ui lint lint-rust lint-ui lint-workflows fmt record simulate export bench-preview update-goldens sounds unfinished recover discard permissions updater-key signing-cert release-check release-bundle release-assets website-install website-dev website-build website-lint clean
 
 help:
 	@echo "install   install JS dependencies"
@@ -32,6 +34,9 @@ help:
 	@echo "release-check   CI: check that TAG matches the app version"
 	@echo "release-bundle  CI: build the signed app, DMG and signed updater archive for each release target"
 	@echo "release-assets  CI: collect the release files and latest.json: make release-assets REPO=owner/repo"
+	@echo "website-dev     run the website in development mode"
+	@echo "website-build   build the website for Vercel"
+	@echo "website-lint    eslint, prettier check, tsc for the website"
 
 install:
 	$(WITHOUT_CERTIFICATE) pnpm install --frozen-lockfile
@@ -156,6 +161,21 @@ release-bundle: install bindings
 release-assets:
 	node scripts/release.mjs assets "$(REPO)" target/release-assets
 
+website-install:
+	pnpm install --frozen-lockfile --filter recast-website...
+
+website-dev: website-install
+	$(WEBSITE_PNPM) dev
+
+website-build: website-install
+	$(WEBSITE_PNPM) build
+
+website-lint: website-install
+	$(WEBSITE_PNPM) lint
+	$(WEBSITE_PNPM) typecheck
+	$(WEBSITE_PNPM) format:check
+
 clean:
 	cargo clean
 	rm -rf $(DESKTOP)/dist
+	rm -rf $(WEBSITE)/.output $(WEBSITE)/.vercel $(WEBSITE)/.nitro $(WEBSITE)/.tanstack
