@@ -15,7 +15,13 @@ export default defineConfig({
     "import.meta.env.SITE_URL": JSON.stringify(siteUrl),
   },
   plugins: [
-    tanstackStart({ prerender: { enabled: true, failOnError: true } }),
+    tanstackStart({
+      prerender: {
+        enabled: true,
+        failOnError: true,
+        filter: ({ path }) => !path.startsWith("/download/"),
+      },
+    }),
     nitro({ preset: "vercel" }),
     react(),
     tailwindcss(),
