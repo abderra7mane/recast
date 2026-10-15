@@ -18,12 +18,18 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSEvent, NSPanel, NSResponder, NSStatusWindowLevel,
-    NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSTrackingArea, NSTrackingAreaOptions, NSView, NSWindow, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{NSObject, NSPoint, NSRect, NSSize};
 
+use recast_capture::picker::rect_from_appkit;
+
 use super::bar_layout::{self as layout, BarButton};
-use crate::appkit::{self, TextStyle, color, inset, ns_rect};
+use crate::{
+    appkit::{self, TextStyle, color, inset, ns_rect},
+    own_clicks::{self, Area},
+};
 
 pub type OnButton = Box<dyn Fn(BarButton)>;
 
@@ -60,6 +66,7 @@ define_class!(
 
         #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
+            self.track_area();
             self.hover(self.button_at(event));
         }
 
@@ -97,6 +104,13 @@ define_class!(
 );
 
 impl BarView {
+    /// Keeps the bar's clicks out of the recording; runs on hover since it can be dragged.
+    fn track_area(&self) {
+        if let Some(window) = self.window() {
+            track_area(&window, MainThreadMarker::from(self));
+        }
+    }
+
     fn button_at(&self, event: &NSEvent) -> Option<BarButton> {
         let p = self.convertPoint_fromView(event.locationInWindow(), None);
         layout::button_at(p.x, p.y)
@@ -163,6 +177,11 @@ impl BarView {
             label.draw_centered(button.label(), r);
         }
     }
+}
+
+fn track_area(window: &NSWindow, mtm: MainThreadMarker) {
+    let frame = rect_from_appkit(&appkit::rect(window.frame()), appkit::main_height(mtm));
+    own_clicks::set(Area::ControlBar, Some(frame));
 }
 
 struct Shown {
@@ -234,6 +253,7 @@ pub fn show(mtm: MainThreadMarker, display_id: u32, started: Instant, on_button:
     panel.setContentView(Some(&view));
     panel.orderFrontRegardless();
     panel.invalidateShadow();
+    track_area(&panel, mtm);
 
     let closed = Arc::new(AtomicBool::new(false));
     SHOWN.with_borrow_mut(|shown| {
@@ -266,6 +286,7 @@ pub fn close(mtm: MainThreadMarker) {
     if let Some(shown) = SHOWN.with_borrow_mut(Option::take) {
         shown.closed.store(true, Ordering::SeqCst);
         shown.panel.orderOut(None);
+        own_clicks::set(Area::ControlBar, None);
         appkit::release_later((shown.panel, shown.view), mtm);
     }
 }
