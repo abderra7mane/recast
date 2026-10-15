@@ -17,6 +17,8 @@ use recast_project::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::own_clicks::ClickFilter;
+
 pub const DEFAULT_FPS: u32 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -161,9 +163,15 @@ impl Session {
 
         let input_sink = {
             let (log, problems) = (log.clone(), problems.clone());
+            let clicks = Mutex::new(ClickFilter::default());
             Arc::new(move |record: InputRecord| {
                 let record = match record {
-                    InputRecord::Event { host_ns, kind } => LogRecord::Input { host_ns, kind },
+                    InputRecord::Event { host_ns, kind } => {
+                        let Some(kind) = clicks.lock().expect("clicks lock").apply(kind) else {
+                            return;
+                        };
+                        LogRecord::Input { host_ns, kind }
+                    }
                     InputRecord::Shape(shape) => LogRecord::CursorShape(shape),
                 };
                 append(&log, &problems, record);

@@ -3221,6 +3221,7 @@ dependencies = [
  "tauri-specta",
  "tempfile",
  "tokio",
+ "tray-icon",
  "tungstenite",
 ]
 

@@ -12,6 +12,7 @@ pub mod hotkeys;
 pub mod logging;
 mod login_item;
 pub mod onboarding;
+mod own_clicks;
 pub mod picker;
 pub mod recording;
 pub mod recording_ui;

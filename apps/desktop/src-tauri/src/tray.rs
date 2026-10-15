@@ -1,8 +1,17 @@
 //! The menu bar icon and its menu. While recording, clicking the icon stops the
 //! recording; the menu opens with a right click and starts with Stop.
 
-use std::{path::Path, sync::Mutex};
+use std::{cell::OnceCell, path::Path, sync::Mutex};
 
+use objc2::{
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel,
+};
+use objc2_app_kit::{
+    NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification, NSStatusItem,
+};
+use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject};
+use recast_capture::picker::rect_from_appkit;
+use recast_project::Rect;
 use tauri::{
     AppHandle, Manager,
     image::Image,
@@ -11,9 +20,11 @@ use tauri::{
 };
 
 use crate::{
+    appkit,
     editor::{self, ProjectSummary},
     flow::{Flow, Phase},
     hotkeys,
+    own_clicks::{self, Area},
     screenshots::{self, files::ScreenshotSummary},
     settings::SettingsStore,
     shortcuts::ShortcutAction,
@@ -315,7 +326,78 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(on_menu)
         .on_tray_icon_event(on_tray)
         .build(app)?;
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        tray.with_inner_tray_icon(|inner| {
+            if let (Some(mtm), Some(item)) = (MainThreadMarker::new(), inner.ns_status_item()) {
+                MenuObserver::start(item, mtm);
+            }
+        })?;
+    }
     Ok(())
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements and the class doesn't implement Drop.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RecastTrayMenuObserver"]
+    #[ivars = Retained<NSStatusItem>]
+    struct MenuObserver;
+
+    impl MenuObserver {
+        #[unsafe(method(menuDidBeginTracking:))]
+        fn menu_did_begin_tracking(&self, notification: &NSNotification) {
+            // The status item holds its menu only while it is shown.
+            let ours = self
+                .ivars()
+                .menu(MainThreadMarker::from(self))
+                .zip(notification.object())
+                .is_some_and(|(menu, object)| {
+                    Retained::as_ptr(&menu).cast::<()>() == Retained::as_ptr(&object).cast()
+                });
+            if ours {
+                own_clicks::set_menu_open(true);
+            }
+        }
+
+        #[unsafe(method(menuDidEndTracking:))]
+        fn menu_did_end_tracking(&self, _notification: &NSNotification) {
+            own_clicks::set_menu_open(false);
+        }
+    }
+);
+
+thread_local! {
+    static MENU_OBSERVER: OnceCell<Retained<MenuObserver>> = const { OnceCell::new() };
+}
+
+impl MenuObserver {
+    /// Tells the recording when the icon's menu is open, so clicks on it are left out.
+    fn start(item: Retained<NSStatusItem>, mtm: MainThreadMarker) {
+        // SAFETY: `init` is NSObject's designated initializer.
+        let observer: Retained<Self> =
+            unsafe { msg_send![super(Self::alloc(mtm).set_ivars(item)), init] };
+        let center = NSNotificationCenter::defaultCenter();
+        // SAFETY: the observer lives for the rest of the app in MENU_OBSERVER, and the
+        // selectors take one NSNotification argument.
+        unsafe {
+            center.addObserver_selector_name_object(
+                &observer,
+                sel!(menuDidBeginTracking:),
+                Some(NSMenuDidBeginTrackingNotification),
+                None,
+            );
+            center.addObserver_selector_name_object(
+                &observer,
+                sel!(menuDidEndTracking:),
+                Some(NSMenuDidEndTrackingNotification),
+                None,
+            );
+        }
+        MENU_OBSERVER.with(|cell| {
+            let _ = cell.set(observer);
+        });
+    }
 }
 
 /// Updates the icon and menu to the recording phase and the latest recordings.
@@ -324,10 +406,7 @@ pub fn refresh(app: &AppHandle) {
         return;
     };
     let phase = app.state::<Flow>().phase();
-    let active = matches!(
-        phase,
-        Phase::Recording { .. } | Phase::Countdown | Phase::Starting
-    );
+    let active = is_active(&phase);
     if let Err(e) = tray
         .set_icon(Some(icon(active, crate::updates::available())))
         .and_then(|_| tray.set_icon_as_template(true))
@@ -335,6 +414,7 @@ pub fn refresh(app: &AppHandle) {
     {
         log::warn!("cannot update the menu bar icon: {e}");
     }
+    track_icon_area(&tray, active);
     match build_menu(app, &phase) {
         Ok(menu) => {
             if let Err(e) = tray.set_menu(Some(menu)) {
@@ -345,6 +425,32 @@ pub fn refresh(app: &AppHandle) {
     }
 }
 
+fn is_active(phase: &Phase) -> bool {
+    matches!(
+        phase,
+        Phase::Recording { .. } | Phase::Countdown | Phase::Starting
+    )
+}
+
+/// The icon's frame in global display points, with y down.
+fn icon_area(tray: &TrayIcon) -> Option<Rect> {
+    tray.with_inner_tray_icon(|inner| {
+        let mtm = MainThreadMarker::new()?;
+        let window = inner.ns_status_item()?.button(mtm)?.window()?;
+        Some(rect_from_appkit(
+            &appkit::rect(window.frame()),
+            appkit::main_height(mtm),
+        ))
+    })
+    .ok()
+    .flatten()
+}
+
+/// Keeps clicks on the icon, which stop the recording, out of it.
+fn track_icon_area(tray: &TrayIcon, active: bool) {
+    own_clicks::set(Area::MenuBarIcon, active.then(|| icon_area(tray)).flatten());
+}
+
 fn on_tray(tray: &TrayIcon, event: TrayIconEvent) {
     let app = tray.app_handle();
     match event {
@@ -352,15 +458,15 @@ fn on_tray(tray: &TrayIcon, event: TrayIconEvent) {
             button: MouseButton::Left,
             button_state: MouseButtonState::Up,
             ..
-        } if matches!(
-            app.state::<Flow>().phase(),
-            Phase::Recording { .. } | Phase::Countdown | Phase::Starting
-        ) =>
-        {
+        } if is_active(&app.state::<Flow>().phase()) => {
             crate::actions::stop_recording(app);
         }
         TrayIconEvent::Enter { .. } if matches!(app.state::<Flow>().phase(), Phase::Idle) => {
             refresh(app);
+        }
+        // Updated before each click in case the icon moved.
+        TrayIconEvent::Enter { .. } if is_active(&app.state::<Flow>().phase()) => {
+            track_icon_area(tray, true);
         }
         _ => {}
     }
